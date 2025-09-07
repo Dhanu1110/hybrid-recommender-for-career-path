@@ -1,9 +1,0 @@
-# System packages required for the application
-# These will be installed via apt-get on the Streamlit Cloud server
-
-# For scientific computing
-build-essential
-
-# For networking (if needed)
-curl
-wget

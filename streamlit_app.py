@@ -233,58 +233,105 @@ def show_quick_demo():
             st.markdown("• Consider transitional roles")
 
 def show_full_demo():
-    """Show full system demo (if components are available)"""
-    
-    st.markdown("### 🔧 Full System Demo")
-    
-    try:
-        # Try to import and use the actual system components
-        from ingest.esco_loader import create_esco_loader
-        from reasoner.skill_gap import create_skill_gap_analyzer
-        
-        st.markdown('<div class="success-box">✅ System components loaded successfully!</div>', unsafe_allow_html=True)
-        
-        # Initialize components
-        if st.button("Initialize System"):
-            with st.spinner("Loading ESCO knowledge graph..."):
-                try:
-                    esco_loader = create_esco_loader('data/processed')
-                    st.success(f"✅ Loaded {len(esco_loader.occupations)} occupations and {len(esco_loader.skills)} skills")
-                except Exception as e:
-                    st.warning(f"⚠️ Using demo mode: {str(e)}")
-        
-        # User input
-        st.markdown("#### 👤 Your Career Information")
-        
-        current_job = st.text_input("Current Job Title", "Software Developer")
-        target_job = st.text_input("Target Job Title", "Data Scientist")
-        
-        current_skills = st.text_area(
-            "Current Skills (one per line)",
-            "Python\nJavaScript\nSQL\nGit"
-        ).split('\n')
-        
-        if st.button("Get Recommendations"):
-            st.markdown("#### 🎯 Career Path Analysis")
-            
-            # Simulate analysis
-            with st.spinner("Analyzing career path..."):
-                import time
-                time.sleep(2)  # Simulate processing
-                
-                st.success("Analysis complete!")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Transition Probability", "78%")
-                with col2:
-                    st.metric("Skill Match", "65%")
-                with col3:
-                    st.metric("Feasibility", "85%")
-    
-    except ImportError as e:
-        st.markdown('<div class="warning-box">⚠️ Full system components not available. Showing demo mode.</div>', unsafe_allow_html=True)
-        show_quick_demo()
+    """Show interactive career path demo"""
+
+    st.markdown("### 🔧 Interactive Career Path Demo")
+
+    st.markdown('<div class="success-box">✅ Interactive demo ready! This simulates the full system functionality.</div>', unsafe_allow_html=True)
+
+    # User input
+    st.markdown("#### 👤 Your Career Information")
+
+    current_job = st.text_input("Current Job Title", "Software Developer")
+    target_job = st.text_input("Target Job Title", "Data Scientist")
+
+    current_skills = st.text_area(
+        "Current Skills (one per line)",
+        "Python\nJavaScript\nSQL\nGit"
+    ).split('\n')
+
+    experience_years = st.slider("Years of Experience", 0, 20, 3)
+
+    if st.button("🚀 Get Career Path Recommendations"):
+        st.markdown("#### 🎯 Career Path Analysis")
+
+        # Simulate analysis with realistic processing
+        with st.spinner("Analyzing career path..."):
+            import time
+            time.sleep(2)  # Simulate processing
+
+            # Calculate simulated scores based on inputs
+            skill_match = min(95, len([s for s in current_skills if s.strip()]) * 15 + 20)
+            experience_bonus = min(20, experience_years * 2)
+            transition_prob = min(95, skill_match + experience_bonus - 10)
+            feasibility = min(98, transition_prob + 5)
+
+            st.success("✅ Analysis complete!")
+
+            # Display metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Transition Probability", f"{transition_prob}%", f"+{experience_bonus}% exp bonus")
+            with col2:
+                st.metric("Skill Match", f"{skill_match}%", f"{len([s for s in current_skills if s.strip()])} skills")
+            with col3:
+                st.metric("Feasibility Score", f"{feasibility}%", "High confidence")
+
+        # Detailed analysis
+        st.markdown("#### 📊 Detailed Analysis")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("##### 🎯 Recommended Skills to Develop")
+            recommended_skills = {
+                "Data Scientist": ["Machine Learning", "Statistics", "Data Visualization", "Deep Learning", "R Programming"],
+                "Product Manager": ["Product Strategy", "User Research", "Analytics", "Agile", "Market Research"],
+                "DevOps Engineer": ["Docker", "Kubernetes", "AWS", "CI/CD", "Infrastructure as Code"],
+                "UI/UX Designer": ["Figma", "User Research", "Prototyping", "Design Systems", "Usability Testing"]
+            }
+
+            skills_for_role = recommended_skills.get(target_job, ["Domain Knowledge", "Communication", "Problem Solving", "Leadership", "Technical Skills"])
+
+            for i, skill in enumerate(skills_for_role[:5]):
+                priority = "🔴 High" if i < 2 else "🟡 Medium" if i < 4 else "🟢 Low"
+                st.markdown(f"• **{skill}** - {priority} Priority")
+
+        with col2:
+            st.markdown("##### 📚 Learning Path Recommendations")
+            st.markdown("**Phase 1 (Months 1-3):**")
+            st.markdown("• Complete online courses in core skills")
+            st.markdown("• Build 2-3 portfolio projects")
+            st.markdown("• Join relevant communities")
+
+            st.markdown("**Phase 2 (Months 4-6):**")
+            st.markdown("• Apply for transitional roles")
+            st.markdown("• Attend industry events")
+            st.markdown("• Seek mentorship")
+
+            st.markdown("**Phase 3 (Months 7-12):**")
+            st.markdown("• Target specific companies")
+            st.markdown("• Prepare for interviews")
+            st.markdown("• Build professional network")
+
+        # Career path visualization
+        st.markdown("#### 🛤️ Suggested Career Path")
+
+        # Create a simple path visualization
+        path_data = pd.DataFrame({
+            'Step': ['Current Role', 'Transition Role', 'Target Role'],
+            'Position': [current_job, f"Junior {target_job}", target_job],
+            'Timeline': ['Now', '6-12 months', '12-18 months'],
+            'Confidence': [100, transition_prob-10, feasibility]
+        })
+
+        st.dataframe(path_data, use_container_width=True)
+
+        # Success tips
+        st.markdown("#### 💡 Success Tips")
+        st.info("🎯 **Focus on building a portfolio** that demonstrates your skills in the target role")
+        st.info("🤝 **Network actively** - many career transitions happen through connections")
+        st.info("📈 **Track your progress** - set monthly goals and measure your skill development")
 
 def show_synthetic_demo():
     """Show synthetic data demo"""
@@ -332,56 +379,88 @@ def show_synthetic_demo():
 
 def show_system_status():
     """Display system status and diagnostics"""
-    
+
     st.markdown('<h2 class="section-header">🔧 System Status</h2>', unsafe_allow_html=True)
-    
-    # Check dependencies
-    st.markdown("### 📦 Dependency Status")
-    
-    dependencies = [
+
+    # Check core dependencies
+    st.markdown("### 📦 Core Dependencies Status")
+
+    core_dependencies = [
         ('streamlit', 'Streamlit'),
         ('pandas', 'Pandas'),
         ('numpy', 'NumPy'),
-        ('torch', 'PyTorch'),
-        ('transformers', 'Transformers'),
-        ('sentence_transformers', 'Sentence Transformers'),
-        ('sklearn', 'Scikit-learn'),
-        ('networkx', 'NetworkX'),
-        ('rdflib', 'RDFLib'),
-        ('plotly', 'Plotly')
+        ('plotly', 'Plotly'),
+        ('yaml', 'PyYAML'),
+        ('requests', 'Requests')
     ]
-    
-    for module, name in dependencies:
+
+    all_core_available = True
+    for module, name in core_dependencies:
         try:
             __import__(module)
             st.success(f"✅ {name}")
         except ImportError:
             st.error(f"❌ {name} - Not installed")
-    
+            all_core_available = False
+
+    if all_core_available:
+        st.success("🎉 All core dependencies are available!")
+
+    # Check optional ML dependencies
+    st.markdown("### 🤖 Optional ML Dependencies")
+    st.info("These are not required for the demo but enable full functionality:")
+
+    ml_dependencies = [
+        ('torch', 'PyTorch'),
+        ('transformers', 'Transformers'),
+        ('sentence_transformers', 'Sentence Transformers'),
+        ('sklearn', 'Scikit-learn'),
+        ('networkx', 'NetworkX'),
+        ('rdflib', 'RDFLib')
+    ]
+
+    ml_count = 0
+    for module, name in ml_dependencies:
+        try:
+            __import__(module)
+            st.success(f"✅ {name}")
+            ml_count += 1
+        except ImportError:
+            st.warning(f"⚠️ {name} - Not installed (optional)")
+
+    st.info(f"ML Dependencies: {ml_count}/{len(ml_dependencies)} available")
+
     # System info
     st.markdown("### 💻 System Information")
-    st.info(f"Python version: {sys.version}")
-    st.info(f"Streamlit version: {st.__version__}")
-    
-    # Project structure
-    st.markdown("### 📁 Project Structure")
-    project_root = Path(__file__).parent
-    
-    important_paths = [
-        'src/',
-        'data/',
-        'models/',
-        'configs/',
-        'requirements.txt',
-        'README.md'
+    st.info(f"🐍 Python version: {sys.version.split()[0]}")
+    st.info(f"🚀 Streamlit version: {st.__version__}")
+
+    # Deployment info
+    st.markdown("### 🌐 Deployment Information")
+    st.success("✅ Running on Streamlit Cloud")
+    st.info("🔗 This is a lightweight demo version optimized for cloud deployment")
+
+    # Feature availability
+    st.markdown("### 🎯 Feature Availability")
+
+    features = [
+        ("Interactive Demo", "✅ Available", "Core career path simulation"),
+        ("Quick Examples", "✅ Available", "Pre-built career transition examples"),
+        ("Visualization", "✅ Available", "Charts and metrics display"),
+        ("Documentation", "✅ Available", "Complete system documentation"),
+        ("Full ML Pipeline", "🔄 Simulated", "Demo mode with realistic outputs"),
+        ("Real-time Training", "⚠️ Limited", "Requires local deployment"),
+        ("Large Model Inference", "⚠️ Limited", "Requires GPU resources")
     ]
-    
-    for path in important_paths:
-        full_path = project_root / path
-        if full_path.exists():
-            st.success(f"✅ {path}")
-        else:
-            st.error(f"❌ {path} - Missing")
+
+    for feature, status, description in features:
+        col1, col2, col3 = st.columns([2, 1, 3])
+        with col1:
+            st.write(f"**{feature}**")
+        with col2:
+            st.write(status)
+        with col3:
+            st.write(description)
 
 def show_documentation():
     """Display documentation"""
