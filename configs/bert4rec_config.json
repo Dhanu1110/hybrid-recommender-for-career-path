@@ -1,0 +1,25 @@
+{
+  "vocab_size": 10000,
+  "d_model": 256,
+  "n_layers": 6,
+  "n_heads": 8,
+  "d_ff": 1024,
+  "max_seq_len": 50,
+  "dropout": 0.1,
+  "pad_token_id": 0,
+  "mask_token_id": 1,
+  "training": {
+    "batch_size": 32,
+    "learning_rate": 1e-4,
+    "weight_decay": 0.01,
+    "num_epochs": 20,
+    "warmup_steps": 1000,
+    "val_split": 0.2,
+    "mask_prob": 0.15
+  },
+  "inference": {
+    "top_k": 10,
+    "temperature": 1.0,
+    "beam_size": 5
+  }
+}

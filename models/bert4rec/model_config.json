@@ -1,0 +1,11 @@
+{
+  "vocab_size": 100,
+  "d_model": 256,
+  "n_layers": 6,
+  "n_heads": 8,
+  "d_ff": 1024,
+  "max_seq_len": 50,
+  "dropout": 0.1,
+  "pad_token_id": 0,
+  "mask_token_id": 1
+}

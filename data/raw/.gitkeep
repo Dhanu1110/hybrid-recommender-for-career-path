@@ -1,0 +1,6 @@
+# This file ensures the data/raw directory is tracked by git
+# Place your raw data files here:
+# - karrierewege.csv
+# - esco_occupations.csv
+# - esco_skills.csv
+# - esco_relations.csv

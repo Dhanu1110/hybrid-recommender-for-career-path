@@ -1,0 +1,110 @@
+# System Configuration for Career Recommender
+
+# Data paths
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  models_dir: "models"
+  logs_dir: "logs"
+
+# Stage 1: Path Generation Model
+path_generation:
+  model_type: "bert4rec"
+  config_path: "configs/bert4rec_config.json"
+  checkpoint_path: "models/bert4rec/checkpoints/best_model.pt"
+  vocab_path: "models/bert4rec/job_vocab.json"
+
+# Stage 2: Skill Gap Reasoning
+skill_gap:
+  # Combination weights for final scoring
+  alpha: 0.6  # Weight for model probability
+  beta: 0.4   # Weight for feasibility score
+  
+  # Distance calculation parameters
+  max_skill_distance: 1.0
+  distance_weight: 0.5
+  
+  # Gap scoring parameters
+  gap_penalty: 0.1
+  missing_skill_penalty: 0.2
+
+# Stage 3: Resource Recommendation
+resources:
+  # TF-IDF parameters
+  max_features: 5000
+  ngram_range: [1, 2]
+  min_df: 2
+  
+  # Embedding parameters
+  embedding_model: "all-MiniLM-L6-v2"
+  embedding_dim: 384
+  
+  # FAISS parameters
+  index_type: "IndexFlatIP"  # Inner product for cosine similarity
+  
+  # Recommendation parameters
+  top_k_resources: 10
+  similarity_threshold: 0.3
+
+# Text-to-ESCO mapping
+text_mapping:
+  embedding_model: "all-MiniLM-L6-v2"
+  fuzzy_threshold: 0.8
+  semantic_threshold: 0.7
+  top_k_matches: 5
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  reload: false
+  log_level: "info"
+
+# Streamlit Configuration
+streamlit:
+  host: "0.0.0.0"
+  port: 8501
+  theme: "light"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/career_recommender.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
+
+# Evaluation Configuration
+evaluation:
+  metrics:
+    - "precision_at_k"
+    - "recall_at_k" 
+    - "ndcg_at_k"
+    - "diversity"
+    - "novelty"
+    - "serendipity"
+  
+  k_values: [1, 5, 10, 20]
+  
+  # Temporal split parameters
+  test_ratio: 0.2
+  val_ratio: 0.1
+  
+  # Baseline models
+  baselines:
+    - "popularity"
+    - "user_based_cf"
+    - "sequential_only"
+
+# Cache Configuration
+cache:
+  enabled: true
+  ttl: 3600  # 1 hour
+  max_size: 1000
+  
+# Security (for production)
+security:
+  admin_token: "your-admin-token-here"
+  cors_origins: ["*"]
+  rate_limit: 100  # requests per minute

@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "career-recommender"
+version = "0.1.0"
+description = "Knowledge-Aware Hybrid Recommender for Sustainable Career Path and Proactive Upskilling"
+authors = [
+    {name = "Career Recommender Team", email = "team@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "sentence-transformers>=2.2.0",
+    "scikit-learn>=1.3.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "rdflib>=6.3.0",
+    "networkx>=3.1.0",
+    "faiss-cpu>=1.7.4",
+    "pyarrow>=12.0.0",
+    "datasets>=2.12.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "streamlit>=1.24.0",
+    "pydantic>=2.0.0",
+    "surprise>=1.1.3",
+    "lightfm>=1.17.0",
+    "tqdm>=4.65.0",
+    "click>=8.1.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.0",
+    "loguru>=0.7.0",
+    "jupyter>=1.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "plotly>=5.15.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.4.0",
+]
+gpu = [
+    "faiss-gpu>=1.7.4",
+]
+llm = [
+    "openai>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/example/career-recommender"
+Repository = "https://github.com/example/career-recommender"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
