@@ -21,10 +21,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Add src to path for imports
-project_root = Path(__file__).parent
-if (project_root / 'src').exists():
-    sys.path.append(str(project_root / 'src'))
+# Note: This is a standalone demo version
+# The full system with ML components is available for local deployment
 
 # Custom CSS
 st.markdown("""
@@ -68,9 +66,12 @@ st.markdown("""
 
 def main():
     """Main application function"""
-    
+
     # Header
     st.markdown('<h1 class="main-header">🚀 Career Path Recommender System</h1>', unsafe_allow_html=True)
+
+    # Demo notice
+    st.info("🌟 **Demo Version** - This is a lightweight demonstration of the career recommender system. For the full ML pipeline with BERT4Rec and ESCO integration, please see the [GitHub repository](https://github.com/Dhanu1110/hybrid-recommender-for-career-path).")
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
@@ -406,29 +407,23 @@ def show_system_status():
     if all_core_available:
         st.success("🎉 All core dependencies are available!")
 
-    # Check optional ML dependencies
-    st.markdown("### 🤖 Optional ML Dependencies")
-    st.info("These are not required for the demo but enable full functionality:")
+    # Information about full system
+    st.markdown("### 🤖 Full System Components")
+    st.info("This is a lightweight demo. The full system includes:")
 
-    ml_dependencies = [
-        ('torch', 'PyTorch'),
-        ('transformers', 'Transformers'),
-        ('sentence_transformers', 'Sentence Transformers'),
-        ('sklearn', 'Scikit-learn'),
-        ('networkx', 'NetworkX'),
-        ('rdflib', 'RDFLib')
+    full_system_components = [
+        "PyTorch - Deep learning framework",
+        "Transformers - BERT4Rec model implementation",
+        "NetworkX - Knowledge graph processing",
+        "RDFLib - ESCO ontology handling",
+        "Scikit-learn - Machine learning utilities",
+        "Sentence Transformers - Text similarity matching"
     ]
 
-    ml_count = 0
-    for module, name in ml_dependencies:
-        try:
-            __import__(module)
-            st.success(f"✅ {name}")
-            ml_count += 1
-        except ImportError:
-            st.warning(f"⚠️ {name} - Not installed (optional)")
+    for component in full_system_components:
+        st.markdown(f"• **{component}**")
 
-    st.info(f"ML Dependencies: {ml_count}/{len(ml_dependencies)} available")
+    st.info("💡 For the full ML pipeline, clone the repository and run locally!")
 
     # System info
     st.markdown("### 💻 System Information")
@@ -472,24 +467,33 @@ def show_documentation():
     with tab1:
         st.markdown("""
         ## 🚀 Quick Start Guide
-        
-        ### Installation
+
+        ### Demo Version (Current)
+        This Streamlit Cloud deployment shows the system's capabilities with simulated data.
+
+        ### Full System Installation
+        For the complete ML pipeline with BERT4Rec and ESCO integration:
+
         ```bash
         git clone https://github.com/Dhanu1110/hybrid-recommender-for-career-path.git
         cd hybrid-recommender-for-career-path
-        pip install -r requirements.txt
+        pip install -r requirements-full.txt  # Full dependencies
         ```
-        
-        ### Running the App
+
+        ### Running Locally
         ```bash
+        # Demo version
         streamlit run streamlit_app.py
+
+        # Full system
+        streamlit run app/streamlit_app.py
         ```
-        
+
         ### Basic Usage
         1. Navigate to the Demo page
         2. Enter your current job title and skills
         3. Specify your target career goal
-        4. Get personalized recommendations
+        4. Get AI-powered recommendations
         """)
     
     with tab2:
