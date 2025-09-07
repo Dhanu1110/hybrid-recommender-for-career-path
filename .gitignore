@@ -272,8 +272,8 @@ temp/
 # *.ipynb filter=nbstripout
 # *.ipynb diff=ipynb
 
-# Streamlit
-.streamlit/
+# Streamlit (allow config for deployment)
+# .streamlit/
 
 # FastAPI
 .pytest_cache/

@@ -1,0 +1,29 @@
+# Streamlit Cloud Optimized Requirements
+# Core dependencies only - minimal for faster deployment
+
+# Core ML/DL libraries
+torch==2.3.1
+transformers==4.44.0
+sentence-transformers==3.0.1
+scikit-learn==1.5.1
+
+# Data processing
+pandas==2.2.2
+numpy==1.26.4
+pyarrow==17.0.0
+
+# Web framework
+streamlit==1.37.1
+plotly==5.23.0
+
+# Knowledge graph and reasoning
+networkx==3.3
+rdflib==7.0.0
+
+# Configuration and utilities
+pyyaml==6.0.2
+tqdm==4.66.5
+typing-extensions==4.12.2
+
+# For compatibility
+scipy==1.14.0
