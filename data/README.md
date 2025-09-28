@@ -216,15 +216,39 @@ print(f'Average sequence length: {df.sequence_length.mean():.2f}')
 
 ## Sample Data Generation
 
-For testing and development, use the built-in sample data generator:
+For testing and development, use the built-in sample data generators:
+
+### Quick Start - Predefined Dataset Sizes
 
 ```bash
-# Generate minimal sample data
-python src/ingest/download_and_prepare.py --create-sample
-
-# Generate larger sample dataset
-python src/ingest/generate_synthetic_data.py --num-users 1000 --num-jobs 100
+# Generate different sized datasets using the convenience script
+python generate_large_dataset.py --size small    # 1K users, 200 jobs, 800 skills
+python generate_large_dataset.py --size medium   # 5K users, 500 jobs, 2K skills
+python generate_large_dataset.py --size large    # 10K users, 1K jobs, 3K skills
+python generate_large_dataset.py --size xlarge   # 25K users, 2K jobs, 5K skills
+python generate_large_dataset.py --size xxlarge  # 50K users, 3K jobs, 8K skills
 ```
+
+### Custom Dataset Generation
+
+```bash
+# Generate custom-sized dataset
+python generate_large_dataset.py --custom --users 15000 --jobs 1500 --skills 4000
+
+# Or use the underlying script directly
+python src/ingest/generate_synthetic_data.py --num-users 10000 --num-jobs 1000 --num-skills 3000
+
+# Generate minimal sample data (legacy)
+python src/ingest/download_and_prepare.py --create-sample
+```
+
+### Dataset Size Recommendations
+
+- **Small (1K users)**: Quick testing and development
+- **Medium (5K users)**: Balanced for feature development
+- **Large (10K users)**: Realistic scale for evaluation
+- **XLarge (25K users)**: Large-scale testing
+- **XXLarge (50K users)**: Stress testing and performance evaluation
 
 ## Performance Considerations
 

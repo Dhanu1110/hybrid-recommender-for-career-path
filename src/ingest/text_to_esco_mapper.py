@@ -302,7 +302,7 @@ class TextToESCOMapper:
     
     def _tfidf_search_occupations(self, text: str, top_k: int) -> List[Dict[str, Union[str, float]]]:
         """Search occupations using TF-IDF similarity."""
-        if not self.tfidf_matrix:
+        if self.tfidf_matrix is None or self.tfidf_matrix.shape[0] == 0:
             return []
         
         query_vector = self.tfidf_vectorizer.transform([text])
@@ -328,7 +328,7 @@ class TextToESCOMapper:
     
     def _tfidf_search_skills(self, text: str, top_k: int) -> List[Dict[str, Union[str, float]]]:
         """Search skills using TF-IDF similarity."""
-        if not self.tfidf_matrix:
+        if self.tfidf_matrix is None or self.tfidf_matrix.shape[0] == 0:
             return []
         
         query_vector = self.tfidf_vectorizer.transform([text])

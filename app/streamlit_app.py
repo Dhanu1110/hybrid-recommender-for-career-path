@@ -28,6 +28,7 @@ try:
     from ingest.esco_loader import create_esco_loader
     from ingest.text_to_esco_mapper import create_text_mapper
     from models.bert4rec import BERT4RecConfig, create_bert4rec_model
+    from models.career_path_recommender import create_career_recommender
     from models.train_path_model import create_synthetic_data
     from reasoner.skill_gap import create_skill_gap_analyzer
 except ImportError as e:
@@ -81,6 +82,8 @@ if 'esco_loader' not in st.session_state:
     st.session_state.esco_loader = None
 if 'skill_analyzer' not in st.session_state:
     st.session_state.skill_analyzer = None
+if 'recommender' not in st.session_state:
+    st.session_state.recommender = None
 
 def initialize_data():
     """Initialize the data and models."""
@@ -104,6 +107,17 @@ def initialize_data():
             
             # Initialize skill gap analyzer
             st.session_state.skill_analyzer = create_skill_gap_analyzer(str(project_root / "configs" / "system_config.yaml"))
+            
+            # Initialize career path recommender
+            try:
+                st.session_state.recommender = create_career_recommender(
+                    model_dir=str(project_root / "models" / "bert4rec"),
+                    esco_data_dir=str(project_root / "data" / "processed")
+                )
+                st.success("Career path recommender loaded successfully!")
+            except Exception as e:
+                st.warning(f"Could not load career recommender: {e}")
+                st.session_state.recommender = None
             
             st.session_state.data_initialized = True
             return True
@@ -286,6 +300,56 @@ def show_onboarding_page():
             for skill in skills_list:
                 st.write(f"• {skill}")
 
+def generate_candidate_paths(user_job_history: List[str], top_k: int = 5) -> List[tuple]:
+    """
+    Generate candidate career paths using the enhanced recommender.
+    
+    Args:
+        user_job_history: List of user's job history
+        top_k: Number of candidate paths to generate
+        
+    Returns:
+        List of (path, probability) tuples
+    """
+    # Use the enhanced recommender if available
+    if st.session_state.recommender is not None:
+        try:
+            st.info("Generating personalized recommendations using the trained model...")
+            
+            # Generate recommendations using the enhanced recommender
+            recommendations = st.session_state.recommender.generate_recommendations(
+                user_job_history, top_k=top_k
+            )
+            
+            # Convert to the format expected by the rest of the system
+            candidate_paths = []
+            for rec in recommendations:
+                # Use the ESCO info if available, otherwise fall back to model key
+                if rec['esco_info']:
+                    path_element = rec['esco_info']['esco_id']
+                else:
+                    # Create a mock ESCO ID for model-generated jobs
+                    path_element = f"model_{rec['model_job_id']}"
+                
+                path = [path_element]
+                probability = rec['probability']
+                candidate_paths.append((path, probability))
+            
+            if candidate_paths:
+                st.success(f"Generated {len(candidate_paths)} personalized recommendations!")
+                return candidate_paths
+            
+        except Exception as e:
+            st.error(f"Error with enhanced recommender: {e}")
+    
+    # Fallback to mock data if recommender is not available or fails
+    st.warning("Using mock recommendations (recommender not available)")
+    return [
+        (['occ_001', 'occ_002'], 0.85),  # Software Engineer -> Data Scientist
+        (['occ_001', 'occ_003'], 0.72),  # Software Engineer -> Marketing Manager
+        (['occ_002', 'occ_003'], 0.58),  # Data Scientist -> Marketing Manager
+    ]
+
 def show_recommendations_page():
     """Show the career path recommendations page."""
     st.markdown('<h2 class="section-header">Career Path Recommendations</h2>', unsafe_allow_html=True)
@@ -295,25 +359,38 @@ def show_recommendations_page():
         st.warning("Please complete the user onboarding first!")
         return
     
-    # Mock recommendations (in real system, this would call the BERT4Rec model)
     st.markdown("### 🎯 Recommended Career Paths")
     
-    # Create mock candidate paths with probabilities
-    candidate_paths = [
-        (['occ_001', 'occ_002'], 0.85),  # Software Engineer -> Data Scientist
-        (['occ_001', 'occ_003'], 0.72),  # Software Engineer -> Marketing Manager
-        (['occ_002', 'occ_003'], 0.58),  # Data Scientist -> Marketing Manager
-    ]
+    # Generate candidate paths using the model
+    with st.spinner("Generating personalized career path recommendations..."):
+        candidate_paths = generate_candidate_paths(st.session_state.user_job_history)
     
-    # Map ESCO IDs to titles
-    job_titles = {
-        'occ_001': 'Software Engineer',
-        'occ_002': 'Data Scientist', 
-        'occ_003': 'Marketing Manager'
-    }
+    # Map ESCO IDs to titles (for mock data) or use actual job titles
+    job_titles = {}
+    if st.session_state.esco_loader:
+        # Use actual ESCO data
+        for esco_id, job_data in st.session_state.esco_loader.occupations.items():
+            job_titles[esco_id] = job_data['title']
+    else:
+        # Fallback to mock data
+        job_titles = {
+            'occ_001': 'Software Engineer',
+            'occ_002': 'Data Scientist', 
+            'occ_003': 'Marketing Manager'
+        }
     
-    # Convert user skills to ESCO IDs (mock mapping)
-    user_skill_set = {'skill_001', 'skill_002'}  # Mock user skills
+    # Convert user skills to ESCO IDs
+    user_skill_set = set()
+    if st.session_state.esco_loader:
+        # Try to map user skills to ESCO IDs
+        text_mapper = create_text_mapper(str(project_root / "data" / "processed"))
+        for skill in st.session_state.user_skills:
+            matches = text_mapper.map_text_to_skills(skill, top_k=1)
+            if matches:
+                user_skill_set.add(matches[0]['esco_id'])
+    else:
+        # Fallback to mock data
+        user_skill_set = {'skill_001', 'skill_002'}
     
     if st.session_state.skill_analyzer:
         # Analyze paths
@@ -322,7 +399,18 @@ def show_recommendations_page():
         # Display recommendations
         for i, analysis in enumerate(analyses, 1):
             with st.container():
-                st.markdown(f"#### Path {i}: {' → '.join([job_titles.get(job_id, job_id) for job_id in analysis.path])}")
+                # Create path string
+                path_titles = []
+                for job_id in analysis.path:
+                    if job_id in job_titles:
+                        path_titles.append(job_titles[job_id])
+                    elif job_id.startswith('model_'):
+                        # Handle model-generated jobs
+                        path_titles.append(f"Recommended Role ({job_id})")
+                    else:
+                        path_titles.append(job_id)
+                
+                st.markdown(f"#### Path {i}: {' → '.join(path_titles)}")
                 
                 col1, col2, col3, col4 = st.columns(4)
                 
@@ -342,12 +430,24 @@ def show_recommendations_page():
                 with st.expander(f"Detailed Analysis for Path {i}"):
                     for job_id, gap in analysis.per_job_gaps.items():
                         job_title = job_titles.get(job_id, job_id)
+                        if job_id.startswith('model_'):
+                            job_title = f"Recommended Role ({job_id})"
+                            
                         st.write(f"**{job_title}:**")
                         st.write(f"- Required skills: {len(gap.required_skills)}")
                         st.write(f"- Missing skills: {len(gap.missing_skills)}")
                         st.write(f"- Gap score: {gap.gap_score:.3f}")
                         
-                        if gap.missing_skills:
+                        if gap.missing_skills and st.session_state.esco_loader:
+                            # Show skill titles instead of IDs
+                            missing_skill_titles = []
+                            for skill_id in gap.missing_skills:
+                                if skill_id in st.session_state.esco_loader.skills:
+                                    missing_skill_titles.append(st.session_state.esco_loader.skills[skill_id]['title'])
+                                else:
+                                    missing_skill_titles.append(skill_id)
+                            st.write("- Missing skills:", ", ".join(missing_skill_titles))
+                        elif gap.missing_skills:
                             st.write("- Missing skill IDs:", ", ".join(gap.missing_skills))
                 
                 st.markdown("---")
@@ -513,9 +613,8 @@ def show_about_page():
     
     ## 📝 Note
     
-    This demonstration uses synthetic data for testing purposes. In a production environment,
-    the system would be trained on real career transition data and integrated with live
-    job market information.
+    This system now uses the actual trained BERT4Rec model to generate personalized career recommendations
+    based on your job history, combined with ESCO knowledge graph analysis for skill gap reasoning.
     """)
 
 if __name__ == "__main__":
