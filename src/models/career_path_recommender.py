@@ -94,21 +94,27 @@ class CareerPathRecommender:
         """Create mappings between model vocabulary and ESCO data."""
         if self.esco_occupations is None:
             self.job_mappings = {}
+            self.model_to_esco = {}
             return
         
-        # Create a simple mapping based on job titles
+        # Create mappings
         self.job_mappings = {}
+        self.model_to_esco = {}
         
-        # For each ESCO occupation, try to find a matching model vocab entry
-        for _, occ_row in self.esco_occupations.iterrows():
+        # Get all model vocab keys (excluding special tokens)
+        model_vocab_keys = [k for k in self.job_to_id.keys() if not k.startswith('<')]
+        
+        # For each ESCO occupation, map to the closest model vocab entry
+        for idx, (_, occ_row) in enumerate(self.esco_occupations.iterrows()):
             esco_id = occ_row['esco_id']
             esco_title = occ_row['title'].lower()
             
-            # Look for exact or partial matches in model vocabulary
+            # Find the best matching model vocab entry
             best_match = None
             best_score = 0
             
-            for vocab_key, vocab_id in self.job_to_id.items():
+            # Try to find a good match
+            for vocab_key in model_vocab_keys:
                 vocab_key_lower = vocab_key.lower()
                 
                 # Exact match
@@ -124,17 +130,34 @@ class CareerPathRecommender:
                 elif vocab_key_lower in esco_title:
                     score = len(vocab_key_lower) / len(esco_title)
                 
+                # Bonus for similar length
+                length_ratio = min(len(esco_title), len(vocab_key_lower)) / max(len(esco_title), len(vocab_key_lower))
+                score *= length_ratio
+                
                 if score > best_score:
                     best_match = vocab_key
                     best_score = score
             
-            if best_match and best_score > 0.3:  # Threshold for good matches
-                self.job_mappings[esco_id] = {
-                    'esco_title': occ_row['title'],
-                    'model_key': best_match,
-                    'model_id': self.job_to_id[best_match],
-                    'match_score': best_score
-                }
+            # Use the model vocab entry at the same index as fallback, or best match if found
+            if idx < len(model_vocab_keys):
+                model_key = model_vocab_keys[idx]
+            else:
+                model_key = best_match if best_match and best_score > 0.3 else model_vocab_keys[0] if model_vocab_keys else "job_2"
+            
+            model_id = self.job_to_id[model_key]
+            
+            self.job_mappings[esco_id] = {
+                'esco_title': occ_row['title'],
+                'model_key': model_key,
+                'model_id': model_id,
+                'match_score': best_score
+            }
+            
+            # Create reverse mapping
+            self.model_to_esco[model_id] = {
+                'esco_id': esco_id,
+                'esco_title': occ_row['title']
+            }
         
         print(f"Created mappings for {len(self.job_mappings)} jobs")
     
@@ -153,18 +176,7 @@ class CareerPathRecommender:
         for job_title in user_job_history:
             job_title_lower = job_title.lower()
             
-            # First, try to find exact matches in model vocabulary
-            found_exact = False
-            for vocab_key, vocab_id in self.job_to_id.items():
-                if job_title_lower == vocab_key.lower():
-                    job_ids.append(vocab_id)
-                    found_exact = True
-                    break
-            
-            if found_exact:
-                continue
-            
-            # If no exact match, try to find in ESCO mappings
+            # Try to find exact matches in ESCO data first
             best_esco_match = None
             best_score = 0
             
@@ -184,19 +196,35 @@ class CareerPathRecommender:
                 elif esco_title in job_title_lower:
                     score = len(esco_title) / len(job_title_lower)
                 
+                # Bonus for similar length
+                length_ratio = min(len(job_title_lower), len(esco_title)) / max(len(job_title_lower), len(esco_title))
+                score *= length_ratio
+                
                 if score > best_score:
                     best_esco_match = mapping
                     best_score = score
             
-            if best_esco_match and best_score > 0.3:
+            # Use the best match if we found one with reasonable confidence
+            if best_esco_match and best_score > 0.4:  # Increased threshold
                 job_ids.append(best_esco_match['model_id'])
+                print(f"Mapped '{job_title}' to '{best_esco_match['esco_title']}' (ID: {best_esco_match['model_id']}, Score: {best_score:.2f})")
             else:
-                # Fallback to a random job from vocabulary (but not padding or mask)
-                vocab_ids = [v for v in self.job_to_id.values() if v > 1]
-                if vocab_ids:
-                    job_ids.append(random.choice(vocab_ids))
+                # Try to find a partial match with lower threshold
+                if best_esco_match:
+                    job_ids.append(best_esco_match['model_id'])
+                    print(f"Fallback mapped '{job_title}' to '{best_esco_match['esco_title']}' (ID: {best_esco_match['model_id']}, Score: {best_score:.2f})")
                 else:
-                    job_ids.append(2)  # Default fallback
+                    # Fallback to a sequential job from vocabulary (but not padding or mask)
+                    vocab_ids = [v for v in self.job_to_id.values() if v > 1]
+                    if vocab_ids:
+                        # Use a different ID based on the job title hash for variety
+                        job_hash = hash(job_title_lower) % len(vocab_ids)
+                        selected_id = vocab_ids[job_hash]
+                        job_ids.append(selected_id)
+                        print(f"Hash mapped '{job_title}' to ID: {selected_id}")
+                    else:
+                        job_ids.append(2)  # Default fallback
+                        print(f"Default mapped '{job_title}' to ID: 2")
         
         return job_ids if job_ids else [2]  # Ensure at least one job
     
@@ -236,13 +264,25 @@ class CareerPathRecommender:
             
             # Try to map back to ESCO if possible
             esco_info = None
-            for esco_id, mapping in self.job_mappings.items():
-                if mapping['model_id'] == model_job_id:
-                    esco_info = {
-                        'esco_id': esco_id,
-                        'esco_title': mapping['esco_title']
-                    }
-                    break
+            # First try direct mapping
+            if model_job_id in self.model_to_esco:
+                esco_info = self.model_to_esco[model_job_id]
+            else:
+                # Try to find any mapping for this model job
+                for esco_id, mapping in self.job_mappings.items():
+                    if mapping['model_id'] == model_job_id:
+                        esco_info = {
+                            'esco_id': esco_id,
+                            'esco_title': mapping['esco_title']
+                        }
+                        break
+            
+            # If still no ESCO mapping, create a generic one
+            if esco_info is None:
+                esco_info = {
+                    'esco_id': f"recommended_{model_job_id}",
+                    'esco_title': f"Recommended Role ({model_job_key})"
+                }
             
             # Create recommendation entry
             rec_entry = {

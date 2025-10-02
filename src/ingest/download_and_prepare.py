@@ -666,6 +666,50 @@ def generate_comprehensive_skills():
         'skill_type': skill_types
     }
 
+def generate_comprehensive_relations(occupation_ids, skill_ids):
+    """Generate comprehensive ESCO relations data with realistic job-skill mappings."""
+    import random
+    
+    source_ids = []
+    target_ids = []
+    relation_types = []
+    
+    # Create realistic mappings between occupations and skills
+    # Each occupation should have 5-15 required skills
+    
+    for occ_id in occupation_ids:
+        # Determine how many skills this occupation requires (5-15)
+        num_skills = random.randint(5, 15)
+        
+        # Select random skills for this occupation
+        selected_skills = random.sample(skill_ids, min(num_skills, len(skill_ids)))
+        
+        for skill_id in selected_skills:
+            source_ids.append(occ_id)
+            target_ids.append(skill_id)
+            relation_types.append('requires')
+    
+    # Add some broader/narrower relationships between skills (10% of skills)
+    num_skill_relations = len(skill_ids) // 10
+    for _ in range(num_skill_relations):
+        if len(skill_ids) > 1:
+            skill1, skill2 = random.sample(skill_ids, 2)
+            # 70% broader, 30% narrower
+            if random.random() < 0.7:
+                source_ids.append(skill2)
+                target_ids.append(skill1)
+                relation_types.append('broader')
+            else:
+                source_ids.append(skill1)
+                target_ids.append(skill2)
+                relation_types.append('narrower')
+    
+    return {
+        'source_id': source_ids,
+        'target_id': target_ids,
+        'relation_type': relation_types
+    }
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description='Data Ingestion Pipeline for Career Recommender')

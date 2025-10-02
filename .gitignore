@@ -307,6 +307,11 @@ Icon?
 ehthumbs.db
 Thumbs.db
 
+# Report drafts and temporary documentation
+REPORT_SECTIONS.md
+QUICK_REFERENCE_SUMMARY.md
+EXAMPLE_RESULTS_FOR_REPORT.md
+
 # Keep important empty directories
 !data/raw/.gitkeep
 !data/processed/.gitkeep
