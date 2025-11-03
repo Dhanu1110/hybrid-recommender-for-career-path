@@ -303,16 +303,10 @@ If you use this system in your research, please cite:
   title={Knowledge-Aware Hybrid Recommender for Sustainable Career Path and Proactive Upskilling},
   author={Career Recommender Team},
   year={2024},
-  url={https://github.com/example/career-recommender}
+  url={https://github.com/Dhanu1110/hybrid-recommender-for-career-path/}
 }
 ```
 
-## 📞 Support
 
-- **Issues**: GitHub Issues
-- **Discussions**: GitHub Discussions
-- **Email**: team@example.com
-
----
 
 **Note**: This system is designed for research and educational purposes. For production deployment, ensure proper data privacy compliance and security measures.
