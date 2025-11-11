@@ -211,8 +211,8 @@ def main():
     try:
         with st.spinner("Processing..."):
             # Header
-            st.markdown('<h1 class="main-header">🚀DA 2 SDG 8 Job Reccomender </h1>', unsafe_allow_html=True)
-            st.markdown("**Knowledge-Aware Hybrid Recommender for Sustainable Career Path and Proactive Upskilling - SDG 8**")
+            st.markdown('<h1 class="main-header">🚀Knowledge-Aware Hybrid Recommender for Sustainable Career Path and Proactive Upskilling </h1>', unsafe_allow_html=True)
+            st.markdown("**Knowledge-Aware Hybrid Recommender for Sustainable Career Path and Proactive Upskilling**")
             
             # Inform user if optional visualization dependency is missing
             if not globals().get('PLOTLY_AVAILABLE', False):
