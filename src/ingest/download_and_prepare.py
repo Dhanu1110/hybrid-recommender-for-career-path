@@ -237,6 +237,11 @@ class DataIngestionPipeline:
                 output_path = self.processed_data_dir / filename
                 dataframes[name].to_parquet(output_path, index=False)
                 logger.info(f"Saved {name} to {output_path}")
+                # Also write a copy named career_sequences.parquet for compatibility
+                if name == 'career_paths':
+                    seq_path = self.processed_data_dir / 'career_sequences.parquet'
+                    dataframes[name].to_parquet(seq_path, index=False)
+                    logger.info(f"Also saved career_sequences to {seq_path}")
     
     def run(self) -> bool:
         """Run the complete data ingestion pipeline."""
@@ -719,6 +724,10 @@ def main():
                        help='Directory containing raw data files')
     parser.add_argument('--processed-dir', default='data/processed',
                        help='Directory for processed data files')
+    parser.add_argument('--esco_dir', default=None,
+                       help='Alias for --raw-dir')
+    parser.add_argument('--out_dir', default=None,
+                       help='Alias for --processed-dir')
     
     args = parser.parse_args()
     
@@ -726,8 +735,12 @@ def main():
         create_sample_data()
         return
     
+    # Resolve possible alias flags
+    raw_dir = args.esco_dir if args.esco_dir else args.raw_dir
+    processed_dir = args.out_dir if args.out_dir else args.processed_dir
+
     # Run the pipeline
-    pipeline = DataIngestionPipeline(args.raw_dir, args.processed_dir)
+    pipeline = DataIngestionPipeline(raw_dir, processed_dir)
     success = pipeline.run()
     
     sys.exit(0 if success else 1)

@@ -1,0 +1,5 @@
+{
+  "vocab_path": "models\\bert4rec\\vocab.json",
+  "checkpoint_path": "models\\bert4rec\\checkpoints\\bert4rec_tiny.pt",
+  "processed_dir": "data\\processed"
+}

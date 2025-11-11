@@ -6,6 +6,8 @@ Career Path Recommender - Enhanced version that bridges synthetic model training
 import torch
 import json
 import random
+import logging
+import yaml
 from pathlib import Path
 from typing import List, Dict, Tuple, Set
 from collections import defaultdict
@@ -37,6 +39,16 @@ class CareerPathRecommender:
         self.job_vocab_path = Path(job_vocab_path)
         self.esco_data_dir = Path(esco_data_dir)
         
+        # Initialize text mapper once
+        from src.ingest.text_to_esco_mapper import TextToESCOMapper
+        self.text_mapper = TextToESCOMapper(data_dir=str(esco_data_dir))
+        
+        # Setup logger
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+        # Load system config
+        self.config = self._read_config()
+
         # Load model components
         self._load_model()
         self._load_vocabulary()
@@ -57,8 +69,7 @@ class CareerPathRecommender:
         checkpoint = torch.load(self.model_checkpoint_path, map_location='cpu')
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
-        
-        print(f"Model loaded with {sum(p.numel() for p in self.model.parameters())} parameters")
+        self.logger.info(f"Model loaded with {sum(p.numel() for p in self.model.parameters())} parameters")
     
     def _load_vocabulary(self):
         """Load model vocabulary."""
@@ -66,29 +77,40 @@ class CareerPathRecommender:
             self.job_to_id = json.load(f)
         self.id_to_job = {v: k for k, v in self.job_to_id.items()}
         
-        print(f"Loaded vocabulary with {len(self.job_to_id)} jobs")
+        self.logger.info(f"Loaded vocabulary with {len(self.job_to_id)} jobs")
     
     def _load_esco_data(self):
         """Load ESCO occupations and skills data."""
         import pandas as pd
         
         # Load ESCO occupations
-        occ_file = self.esco_data_dir / "esco_occupations.parquet"
+        occ_file = self.esco_data_dir / "raw/esco_occupations.csv"  # Look in raw data folder for CSV
         if occ_file.exists():
-            self.esco_occupations = pd.read_parquet(occ_file)
-            print(f"Loaded {len(self.esco_occupations)} ESCO occupations")
+            self.esco_occupations = pd.read_csv(occ_file)
+            self.logger.info(f"Loaded {len(self.esco_occupations)} ESCO occupations")
         else:
             self.esco_occupations = None
-            print("No ESCO occupations data found")
+            self.logger.info("No ESCO occupations data found")
         
-        # Load ESCO skills
-        skills_file = self.esco_data_dir / "esco_skills.parquet"
+        # Load ESCO skills  
+        skills_file = self.esco_data_dir / "raw/esco_skills.csv"  # Look in raw data folder for CSV
         if skills_file.exists():
-            self.esco_skills = pd.read_parquet(skills_file)
-            print(f"Loaded {len(self.esco_skills)} ESCO skills")
+            self.esco_skills = pd.read_csv(skills_file)
+            self.logger.info(f"Loaded {len(self.esco_skills)} ESCO skills")
         else:
             self.esco_skills = None
-            print("No ESCO skills data found")
+            self.logger.info("No ESCO skills data found")
+
+    def _read_config(self):
+        cfg = {}
+        try:
+            cfg_path = Path('configs') / 'system_config.yaml'
+            if cfg_path.exists():
+                with open(cfg_path, 'r') as f:
+                    cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+        return cfg
     
     def _create_mappings(self):
         """Create mappings between model vocabulary and ESCO data."""
@@ -100,66 +122,37 @@ class CareerPathRecommender:
         # Create mappings
         self.job_mappings = {}
         self.model_to_esco = {}
-        
+
         # Get all model vocab keys (excluding special tokens)
         model_vocab_keys = [k for k in self.job_to_id.keys() if not k.startswith('<')]
-        
-        # For each ESCO occupation, map to the closest model vocab entry
-        for idx, (_, occ_row) in enumerate(self.esco_occupations.iterrows()):
-            esco_id = occ_row['esco_id']
-            esco_title = occ_row['title'].lower()
-            
-            # Find the best matching model vocab entry
-            best_match = None
-            best_score = 0
-            
-            # Try to find a good match
-            for vocab_key in model_vocab_keys:
-                vocab_key_lower = vocab_key.lower()
-                
-                # Exact match
-                if esco_title == vocab_key_lower:
-                    best_match = vocab_key
-                    best_score = 1.0
-                    break
-                
-                # Partial match scoring
-                score = 0
-                if esco_title in vocab_key_lower:
-                    score = len(esco_title) / len(vocab_key_lower)
-                elif vocab_key_lower in esco_title:
-                    score = len(vocab_key_lower) / len(esco_title)
-                
-                # Bonus for similar length
-                length_ratio = min(len(esco_title), len(vocab_key_lower)) / max(len(esco_title), len(vocab_key_lower))
-                score *= length_ratio
-                
-                if score > best_score:
-                    best_match = vocab_key
-                    best_score = score
-            
-            # Use the model vocab entry at the same index as fallback, or best match if found
-            if idx < len(model_vocab_keys):
-                model_key = model_vocab_keys[idx]
-            else:
-                model_key = best_match if best_match and best_score > 0.3 else model_vocab_keys[0] if model_vocab_keys else "job_2"
-            
-            model_id = self.job_to_id[model_key]
-            
-            self.job_mappings[esco_id] = {
-                'esco_title': occ_row['title'],
-                'model_key': model_key,
-                'model_id': model_id,
-                'match_score': best_score
-            }
-            
-            # Create reverse mapping
-            self.model_to_esco[model_id] = {
-                'esco_id': esco_id,
-                'esco_title': occ_row['title']
-            }
-        
-        print(f"Created mappings for {len(self.job_mappings)} jobs")
+
+        # Confidence threshold from config
+        conf_thresh = float(self.config.get('mapping', {}).get('confidence_threshold', 0.4))
+
+        # For each model vocab key, try to map it to an ESCO occupation
+        for model_key in model_vocab_keys:
+            esco_id, score = self.text_mapper.map_text_to_occupations(
+                model_key, top_k=1, score_threshold=conf_thresh
+            )
+
+            if esco_id:
+                esco_title = self.esco_occupations[self.esco_occupations['esco_id'] == esco_id]['title'].iloc[0]
+                model_id = self.job_to_id[model_key]
+
+                self.job_mappings[esco_id] = {
+                    'esco_title': esco_title,
+                    'model_key': model_key,
+                    'model_id': model_id,
+                    'match_score': score
+                }
+
+                # Reverse mapping
+                self.model_to_esco[model_id] = {
+                    'esco_id': esco_id,
+                    'esco_title': esco_title
+                }
+
+        self.logger.info(f"Created mappings for {len(self.job_mappings)} ESCO occupations (threshold={conf_thresh})")
     
     def map_user_jobs_to_model(self, user_job_history: List[str]) -> List[int]:
         """
@@ -172,66 +165,46 @@ class CareerPathRecommender:
             List of model-compatible job IDs
         """
         job_ids = []
-        
+
+        # Lazy initialize semantic mapper only when needed
+        from src.ingest.text_to_esco_mapper import map_text_to_occupations
+
+        conf_thresh = float(self.config.get('mapping', {}).get('confidence_threshold', 0.4))
+
         for job_title in user_job_history:
             job_title_lower = job_title.lower()
-            
-            # Try to find exact matches in ESCO data first
-            best_esco_match = None
-            best_score = 0
-            
+
+            # Try exact ESCO title matches in our job_mappings
+            matched_model_id = None
+            self.logger.debug(f"Available mappings: {self.job_mappings}")
+            self.logger.debug(f"Looking for exact match for: '{job_title_lower}'")
             for esco_id, mapping in self.job_mappings.items():
-                esco_title = mapping['esco_title'].lower()
-                
-                # Exact match
-                if job_title_lower == esco_title:
-                    best_esco_match = mapping
-                    best_score = 1.0
+                self.logger.debug(f"Checking against ESCO title: '{mapping['esco_title'].lower()}'")
+                if job_title_lower == mapping['esco_title'].lower():
+                    matched_model_id = mapping['model_id']
+                    self.logger.debug(f"Exact ESCO title match for '{job_title}' -> {matched_model_id}")
                     break
-                
-                # Partial match scoring
-                score = 0
-                if job_title_lower in esco_title:
-                    score = len(job_title_lower) / len(esco_title)
-                elif esco_title in job_title_lower:
-                    score = len(esco_title) / len(job_title_lower)
-                
-                # Bonus for similar length
-                length_ratio = min(len(job_title_lower), len(esco_title)) / max(len(job_title_lower), len(esco_title))
-                score *= length_ratio
-                
-                if score > best_score:
-                    best_esco_match = mapping
-                    best_score = score
-            
-            # Use the best match if we found one with reasonable confidence
-            if best_esco_match and best_score > 0.4:  # Increased threshold
-                job_ids.append(best_esco_match['model_id'])
-                print(f"Mapped '{job_title}' to '{best_esco_match['esco_title']}' (ID: {best_esco_match['model_id']}, Score: {best_score:.2f})")
-            else:
-                # Try to find a partial match with lower threshold
-                if best_esco_match:
-                    job_ids.append(best_esco_match['model_id'])
-                    print(f"Fallback mapped '{job_title}' to '{best_esco_match['esco_title']}' (ID: {best_esco_match['model_id']}, Score: {best_score:.2f})")
+
+            # If no exact match, use semantic mapper as default
+            if matched_model_id is None:
+                esco_id, score = self.text_mapper.map_text_to_occupations(job_title, top_k=1, score_threshold=conf_thresh)
+                if esco_id and score >= conf_thresh and esco_id in self.job_mappings:
+                    matched_model_id = self.job_mappings[esco_id]['model_id']
+                    self.logger.debug(f"Semantic mapper matched '{job_title}' -> {esco_id} (score={score:.2f}) -> model_id {matched_model_id}")
                 else:
-                    # Fallback to a sequential job from vocabulary (but not padding or mask)
-                    vocab_ids = [v for v in self.job_to_id.values() if v > 1]
-                    if vocab_ids:
-                        # Use a different ID based on the job title hash for variety
-                        job_hash = hash(job_title_lower) % len(vocab_ids)
-                        selected_id = vocab_ids[job_hash]
-                        job_ids.append(selected_id)
-                        print(f"Hash mapped '{job_title}' to ID: {selected_id}")
-                    else:
-                        job_ids.append(2)  # Default fallback
-                        print(f"Default mapped '{job_title}' to ID: 2")
-        
-        return job_ids if job_ids else [2]  # Ensure at least one job
+                    # Leave unmapped rather than coercing to a default
+                    self.logger.debug(f"Could not map '{job_title}' confidently (score={score if 'score' in locals() else 0.0}). Leaving unmapped.")
+
+            if matched_model_id is not None:
+                job_ids.append(matched_model_id)
+
+        return job_ids
     
     def generate_recommendations(self, 
                                user_job_history: List[str], 
                                user_skills: List[str] = None,
-                               top_k: int = 5) -> List[Dict]:
+                               top_k: int = 5,
+                               exclude_seen: bool = True) -> List[Dict]:
         """
         Generate personalized career path recommendations.
         
@@ -245,56 +218,76 @@ class CareerPathRecommender:
         """
         # Map user jobs to model input
         job_ids = self.map_user_jobs_to_model(user_job_history)
-        print(f"Mapped user jobs {user_job_history} to model IDs {job_ids}")
-        
+        self.logger.debug(f"Mapped user jobs {user_job_history} to model IDs {job_ids}")
+
+        if not job_ids:
+            self.logger.warning("No mapped job ids from user input; returning empty recommendations")
+            return []
+
         # Convert to tensor
         input_tensor = torch.tensor([job_ids], dtype=torch.long)
-        
-        # Generate recommendations
+
+        # Run model forward to get logits [B, L, V]
         with torch.no_grad():
-            recommendations = self.model.generate_next_jobs(input_tensor, top_k=top_k)
-        
-        # Process recommendations
+            logits = self.model(input_tensor)
+
+        # Get last token logits and compute probabilities
+        last_logits = logits[:, -1, :].squeeze(0)  # [V]
+        probs = torch.nn.functional.softmax(last_logits, dim=-1)
+
+        pad_id = self.model.pad_token_id if hasattr(self.model, 'pad_token_id') else 0
+        mask_id = self.model.mask_token_id if hasattr(self.model, 'mask_token_id') else 1
+
+        # Set PAD/MASK to 0 probability
+        if 0 <= pad_id < probs.size(0):
+            probs[pad_id] = 0.0
+        if 0 <= mask_id < probs.size(0):
+            probs[mask_id] = 0.0
+
+        # Optionally exclude seen ids
+        seen_ids = set(job_ids)
+        if exclude_seen:
+            for sid in seen_ids:
+                if 0 <= sid < probs.size(0):
+                    probs[sid] = 0.0
+
+        # Compute combined score if feasibility available (placeholder: 1.0)
+        alpha = float(self.config.get('scoring', {}).get('alpha', 0.6))
+        beta = float(self.config.get('scoring', {}).get('beta', 0.4))
+
+        # Use predict_next helper to pick top-k after filtering
+        from src.models.bert4rec import predict_next
+
+        topk = predict_next(last_logits, pad_token_id=pad_id, mask_token_id=mask_id,
+                            exclude_ids=seen_ids if exclude_seen else set(), top_k=top_k)
+
         results = []
-        for i, rec in enumerate(recommendations[0]):  # First batch element
-            model_job_id, probability = rec
-            
-            # Get model job key
+        for rank, (model_job_id, prob) in enumerate(topk, start=1):
             model_job_key = self.id_to_job.get(model_job_id, f"job_{model_job_id}")
-            
-            # Try to map back to ESCO if possible
+
             esco_info = None
-            # First try direct mapping
             if model_job_id in self.model_to_esco:
                 esco_info = self.model_to_esco[model_job_id]
             else:
-                # Try to find any mapping for this model job
+                # Try to find any mapping
                 for esco_id, mapping in self.job_mappings.items():
-                    if mapping['model_id'] == model_job_id:
-                        esco_info = {
-                            'esco_id': esco_id,
-                            'esco_title': mapping['esco_title']
-                        }
+                    if mapping.get('model_id') == model_job_id:
+                        esco_info = {'esco_id': esco_id, 'esco_title': mapping['esco_title']}
                         break
-            
-            # If still no ESCO mapping, create a generic one
+
             if esco_info is None:
-                esco_info = {
-                    'esco_id': f"recommended_{model_job_id}",
-                    'esco_title': f"Recommended Role ({model_job_key})"
-                }
-            
-            # Create recommendation entry
+                esco_info = {'esco_id': f'recommended_{model_job_id}', 'esco_title': model_job_key}
+
             rec_entry = {
-                'rank': i + 1,
+                'rank': rank,
                 'model_job_key': model_job_key,
                 'model_job_id': model_job_id,
-                'probability': float(probability),
+                'probability': float(prob),
                 'esco_info': esco_info
             }
-            
             results.append(rec_entry)
-        
+
+        self.logger.debug(f"Top-{top_k} recommendations: {results}")
         return results
     
     def get_diverse_recommendations(self, 

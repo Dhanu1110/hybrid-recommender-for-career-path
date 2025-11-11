@@ -94,7 +94,7 @@ class SkillGapAnalyzer:
                     candidate_path: List[str],
                     model_prob: float) -> PathAnalysis:
         """
-        Analyze a complete career path for skill gaps and feasibility.
+        Analyze feasibility of a career path.
         
         Args:
             user_skill_set: Set of user's current skill IDs
@@ -104,6 +104,10 @@ class SkillGapAnalyzer:
         Returns:
             Complete path analysis with gaps and scores
         """
+        logger.info(f"Analyzing path: {candidate_path}")
+        logger.info(f"User skills: {user_skill_set}")
+        logger.info(f"Model probability: {model_prob}")
+        
         per_job_gaps = {}
         total_missing_skills = 0
         skill_distances = []
@@ -211,20 +215,27 @@ class SkillGapAnalyzer:
         if not required_skills:
             return 0.0
         
-        # Base gap ratio
-        gap_ratio = len(missing_skills) / len(required_skills)
-        
-        # Distance-weighted penalty
-        if missing_skills:
-            avg_distance = np.mean(list(skill_distances.values()))
-            distance_penalty = avg_distance * self.distance_weight
-        else:
-            distance_penalty = 0.0
-        
+        # Compute per-required-skill penalty: 0 if user has it, otherwise normalized distance
+        penalties = []
+        for rs in required_skills:
+            if rs not in missing_skills:
+                penalties.append(0.0)
+            else:
+                dist = skill_distances.get(rs, self.max_skill_distance)
+                # normalize distance to [0,1]
+                norm = min(max(dist / max(self.max_skill_distance, 1e-6), 0.0), 1.0)
+                penalties.append(norm)
+
+        # Average penalty across required skills gives a gap_ratio in [0,1]
+        gap_ratio = float(np.mean(penalties)) if penalties else 0.0
+
+        # Distance-weighted penalty (redundant with per-skill normalization but kept as a small additional factor)
+        distance_penalty = (np.mean(list(skill_distances.values())) * self.distance_weight) if skill_distances else 0.0
+
         # Combine gap ratio and distance penalty
-        gap_score = gap_ratio + distance_penalty
-        
-        return min(gap_score, 1.0)  # Cap at 1.0
+        gap_score = gap_ratio + (distance_penalty * 0.25)  # reduce double-counting impact
+
+        return min(gap_score, 1.0)
     
     def _calculate_feasibility_score(self, 
                                    per_job_gaps: Dict[str, SkillGap],
@@ -241,6 +252,13 @@ class SkillGapAnalyzer:
         """
         if not per_job_gaps:
             return 0.0
+            
+        logger.info("Calculating feasibility score:")
+        for job_id, gap in per_job_gaps.items():
+            logger.info(f"  Job {job_id}:")
+            logger.info(f"    Required skills: {len(gap.required_skills)}")
+            logger.info(f"    Missing skills: {len(gap.missing_skills)}")
+            logger.info(f"    Gap score: {gap.gap_score}")
         
         # Calculate average gap score across all jobs
         gap_scores = [gap.gap_score for gap in per_job_gaps.values()]

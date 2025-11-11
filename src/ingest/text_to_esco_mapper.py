@@ -46,6 +46,15 @@ logger = logging.getLogger(__name__)
 class TextToESCOMapper:
     """Maps free text to ESCO occupations and skills using multiple similarity methods."""
     
+    # Class-level cache for singleton pattern
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self, data_dir: str = "data/processed", model_name: str = "all-MiniLM-L6-v2"):
         """
         Initialize the text-to-ESCO mapper.
@@ -54,6 +63,9 @@ class TextToESCOMapper:
             data_dir: Directory containing processed ESCO data
             model_name: Sentence transformer model name
         """
+        # Skip initialization if already done
+        if hasattr(self, '_initialized') and self._initialized:
+            return
         self.data_dir = Path(data_dir)
         self.model_name = model_name
         
@@ -78,12 +90,54 @@ class TextToESCOMapper:
         self._load_data()
         self._initialize_models()
         self._build_indices()
+        
+        self._initialized = True
+        
+    def map_text_to_occupations(self, text: str, top_k: int = 1, score_threshold: float = 0.0) -> List[Dict[str, Union[str, float]]]:
+        """Map text to ESCO occupation IDs with scores."""
+        normalized_text = self._normalize_text(text)
+        results = []
+
+        # First try semantic search if available
+        if self.sentence_model and self.occupation_index is not None:
+            top_matches = self._semantic_occupation_search(normalized_text, top_k)
+            if top_matches:
+                for match in top_matches:
+                    esco_id = self.occupation_ids[int(match[0])]
+                    score = float(match[1])
+                    if score >= score_threshold:
+                        results.append({
+                            'esco_id': esco_id,
+                            'title': self.occupations[esco_id]['title'],
+                            'description': self.occupations[esco_id].get('description', ''),
+                            'score': score
+                        })
+        
+        # Try fuzzy matching as fallback
+        if not results:
+            candidates = [occ['title'] for occ in self.occupations.values()]
+            fuzzy_matches = self._fuzzy_string_match(normalized_text, candidates, top_k)
+            if fuzzy_matches:
+                for matched_title, score in fuzzy_matches:
+                    if score >= score_threshold:
+                        # Find the ESCO ID with this title
+                        for esco_id, data in self.occupations.items():
+                            if data['title'] == matched_title:
+                                results.append({
+                                    'esco_id': esco_id,
+                                    'title': matched_title,
+                                    'description': data.get('description', ''),
+                                    'score': score
+                                })
+                                break
+        
+        return results
     
     def _load_data(self) -> None:
         """Load ESCO occupations and skills data."""
         logger.info("Loading ESCO data for mapping...")
         
-        # Load occupations
+        # Load occupations from parquet
         occ_file = self.data_dir / "esco_occupations.parquet"
         if occ_file.exists():
             occ_df = pd.read_parquet(occ_file)
@@ -101,7 +155,7 @@ class TextToESCOMapper:
             
             logger.info(f"Loaded {len(self.occupations)} occupations")
         
-        # Load skills
+        # Load skills from parquet
         skills_file = self.data_dir / "esco_skills.parquet"
         if skills_file.exists():
             skills_df = pd.read_parquet(skills_file)
@@ -222,27 +276,34 @@ class TextToESCOMapper:
         if all_texts:
             self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(all_texts)
     
-    def map_text_to_occupations(self, text: str, top_k: int = 5) -> List[Dict[str, Union[str, float]]]:
+    def map_text_to_occupations(self, text: str, top_k: int = 1, score_threshold: float = 0.0) -> Tuple[Optional[str], float]:
         """
         Map free text to ESCO occupations.
         
         Args:
             text: Input text (job title, description, etc.)
             top_k: Number of top matches to return
+            score_threshold: Minimum confidence score to accept a match
             
         Returns:
-            List of occupation matches with scores
+            Tuple of (esco_id, score) if match found, (None, score) otherwise
         """
         normalized_text = self._normalize_text(text)
         
         # Try semantic similarity first
         if self.sentence_model and self.occupation_index and FAISS_AVAILABLE:
-            return self._semantic_search_occupations(normalized_text, top_k)
+            matches = self._semantic_search_occupations(normalized_text, top_k)
+            if matches and matches[0]['score'] >= score_threshold:
+                return matches[0]['esco_id'], matches[0]['score']
         
         # Fallback to TF-IDF similarity
-        return self._tfidf_search_occupations(normalized_text, top_k)
+        matches = self._tfidf_search_occupations(normalized_text, top_k)
+        if matches and matches[0]['score'] >= score_threshold:
+            return matches[0]['esco_id'], matches[0]['score']
+            
+        return None, 0.0
     
-    def map_text_to_skills(self, text: str, top_k: int = 5) -> List[Dict[str, Union[str, float]]]:
+    def map_text_to_skills(self, text: str, top_k: int = 5, score_threshold: float = 0.0) -> List[Dict[str, Union[str, float]]]:
         """
         Map free text to ESCO skills.
         
@@ -418,3 +479,63 @@ def create_text_mapper(data_dir: str = "data/processed") -> TextToESCOMapper:
         Initialized TextToESCOMapper instance
     """
     return TextToESCOMapper(data_dir)
+
+
+def map_text_to_occupations(text: str, top_k: int = 1, score_threshold: float = None, data_dir: str = "data/processed") -> tuple:
+    """
+    Convenience wrapper that returns a single (esco_id, score) tuple or (None, 0.0).
+
+    Args:
+        text: Input text to map
+        top_k: How many candidates to compute internally (default 1)
+        score_threshold: Minimum score to accept a mapping. If None, read from configs/system_config.yaml
+        data_dir: Processed ESCO data directory
+
+    Returns:
+        (esco_id, score) or (None, 0.0) when below threshold or no matches
+    """
+    # Lazy import of yaml to avoid hard dependency in some environments
+    try:
+        import yaml
+        config_path = Path("configs") / "system_config.yaml"
+        if score_threshold is None and config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = yaml.safe_load(f)
+                    score_threshold = float(cfg.get('mapping', {}).get('confidence_threshold', 0.6))
+            except Exception:
+                score_threshold = 0.6
+        elif score_threshold is None:
+            score_threshold = 0.6
+    except Exception:
+        score_threshold = score_threshold or 0.6
+
+    mapper = TextToESCOMapper(data_dir=data_dir)
+    matches = mapper.map_text_to_occupations(text, top_k=top_k, score_threshold=score_threshold)
+
+    # mapper.map_text_to_occupations may return either a tuple (esco_id, score)
+    # or a list of candidate dicts. Handle both.
+    if not matches:
+        return None, 0.0
+
+    # If tuple (esco_id, score)
+    if isinstance(matches, tuple) and len(matches) == 2:
+        esco_id, score = matches
+        try:
+            score = float(score)
+        except Exception:
+            score = 0.0
+        if esco_id and score >= (score_threshold or 0.0):
+            return esco_id, score
+        return None, score
+
+    # If list of dicts
+    if isinstance(matches, list) and len(matches) > 0 and isinstance(matches[0], dict):
+        top = matches[0]
+        score = float(top.get('score', 0.0))
+        esco_id = top.get('esco_id')
+        if esco_id and score >= (score_threshold or 0.0):
+            return esco_id, score
+        return None, score
+
+    return None, 0.0

@@ -1,3 +1,15 @@
+mapping:
+  confidence_threshold: 0.2  # Lowered for better matching during testing
+scoring:
+  alpha: 0.6
+  beta: 0.4
+train:
+  max_len: 32
+  mask_prob: 0.15
+  epochs: 5
+  batch_size: 32
+gemini:
+  model: "gemini-1.5-flash"
 # System Configuration for Career Recommender
 
 # Data paths

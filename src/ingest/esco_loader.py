@@ -19,6 +19,7 @@ from typing import Dict, List, Set, Optional, Tuple, Union
 import numpy as np
 from collections import defaultdict, deque
 import pickle
+from .text_to_esco_mapper import TextToESCOMapper
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,9 @@ class ESCOKnowledgeGraph:
         # Load data
         self._load_data()
         self._build_graph()
+        
+        # Initialize mapper
+        self.mapper = TextToESCOMapper()
         
     def _load_data(self) -> None:
         """Load ESCO data from processed Parquet files."""
@@ -298,6 +302,43 @@ class ESCOKnowledgeGraph:
         
         logger.info(f"Saved cache to {cache_file}")
     
+    def map_job_title(self, title: str) -> Optional[str]:
+        """
+        Map a job title to its ESCO occupation ID.
+        
+        Args:
+            title: Job title text to map
+            
+        Returns:
+            ESCO occupation ID if match found, None otherwise
+        """
+        # Use TextToESCOMapper to find matches
+        try:
+            matches = self.mapper.map_text_to_occupations(title)
+        except Exception:
+            return None
+
+        # mapper may return either a tuple (esco_id, score) or a list of dicts
+        if not matches:
+            return None
+
+        if isinstance(matches, tuple) and len(matches) == 2:
+            return matches[0]
+
+        # If mapper returns a list of dicts, pick the top one's esco_id
+        if isinstance(matches, list) and len(matches) > 0 and isinstance(matches[0], dict):
+            return matches[0].get('esco_id')
+
+        return None
+
+    def get_occupation_by_id(self, esco_id: str) -> Optional[Dict[str, str]]:
+        """Return occupation record for given ESCO id or None."""
+        return self.occupations.get(esco_id)
+
+    def get_skill_by_id(self, esco_id: str) -> Optional[Dict[str, str]]:
+        """Return skill record for given ESCO id or None."""
+        return self.skills.get(esco_id)
+
     def load_cache(self, cache_file: str = "data/processed/esco_cache.pkl") -> None:
         """Load computed caches from disk."""
         try:

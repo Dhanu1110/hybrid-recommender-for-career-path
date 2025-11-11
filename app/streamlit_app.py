@@ -11,12 +11,22 @@ This app provides a user-friendly interface for the three-stage career recommend
 import streamlit as st
 import sys
 import os
+import re
 from pathlib import Path
 import pandas as pd
 import json
-import plotly.express as px
-import plotly.graph_objects as go
-from typing import List, Dict, Set
+# Optional visualization dependency: Plotly
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except Exception:
+    px = None
+    go = None
+    PLOTLY_AVAILABLE = False
+import yaml
+import requests
+from typing import List, Dict, Set, Optional, Tuple
 
 # Add src to path for imports
 project_root = Path(__file__).parent.parent
@@ -25,8 +35,8 @@ sys.path.append(str(project_root / 'src'))
 # Import our modules
 try:
     from ingest.download_and_prepare import create_sample_data, DataIngestionPipeline
-    from ingest.esco_loader import create_esco_loader
-    from ingest.text_to_esco_mapper import create_text_mapper
+    from ingest.esco_loader import create_esco_loader, ESCOKnowledgeGraph
+    from ingest.text_to_esco_mapper import create_text_mapper, map_text_to_occupations
     from models.bert4rec import BERT4RecConfig, create_bert4rec_model
     from models.career_path_recommender import create_career_recommender
     from models.train_path_model import create_synthetic_data
@@ -35,6 +45,11 @@ except ImportError as e:
     st.error(f"Import error: {e}")
     st.error("Please ensure all dependencies are installed and the project structure is correct.")
     st.stop()
+    
+if not PLOTLY_AVAILABLE:
+    # Avoid raising at import time; surface a friendly warning in the UI later
+    import logging
+    logging.getLogger(__name__).warning("plotly not installed - visualizations will be disabled.")
 
 # Page configuration
 st.set_page_config(
@@ -76,20 +91,44 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Initialize session state
-if 'data_initialized' not in st.session_state:
-    st.session_state.data_initialized = False
-if 'esco_loader' not in st.session_state:
-    st.session_state.esco_loader = None
-if 'skill_analyzer' not in st.session_state:
-    st.session_state.skill_analyzer = None
-if 'recommender' not in st.session_state:
-    st.session_state.recommender = None
+for key in ['data_initialized', 'config', 'esco_loader', 'skill_analyzer', 'recommender', 'text_mapper']:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+# Set initial values
+st.session_state.data_initialized = st.session_state.data_initialized or False
+
+def load_config() -> dict:
+    """Load system configuration from YAML."""
+    config_path = project_root / "configs" / "system_config.yaml"
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            if not config.get('mapping', {}).get('confidence_threshold'):
+                config.setdefault('mapping', {})['confidence_threshold'] = 0.4
+            if not config.get('data', {}).get('processed_dir'):
+                config.setdefault('data', {})['processed_dir'] = 'data/processed'
+            return config
+    except Exception as e:
+        st.error(f"Error loading config: {e}")
+        return {
+            'mapping': {'confidence_threshold': 0.4},
+            'data': {'processed_dir': 'data/processed'}
+        }
 
 def initialize_data():
     """Initialize the data and models."""
     with st.spinner("Initializing data and models..."):
         try:
-            # Create sample data if it doesn't exist
+            # Load configuration
+            config = load_config()
+            st.session_state.config = config
+            
+            # Setup data directories
+            processed_dir = config.get('data', {}).get('processed_dir', 'data/processed')
+            Path(processed_dir).mkdir(parents=True, exist_ok=True)
+            
+            # Create sample data if needed
             if not (project_root / "data" / "raw" / "karrierewege.csv").exists():
                 st.info("Creating sample data...")
                 create_sample_data()
@@ -97,26 +136,66 @@ def initialize_data():
                 # Run data ingestion
                 pipeline = DataIngestionPipeline()
                 success = pipeline.run()
-                
                 if not success:
-                    st.error("Data ingestion failed!")
+                    st.error("Data ingestion failed")
                     return False
-            
+                
             # Initialize ESCO loader
-            st.session_state.esco_loader = create_esco_loader(str(project_root / "data" / "processed"))
+            st.info("Loading ESCO knowledge graph...")
+            esco_loader = create_esco_loader(processed_dir)
+            if not esco_loader:
+                st.error("Failed to load ESCO data")
+                return False
+            st.session_state.esco_loader = esco_loader
             
-            # Initialize skill gap analyzer
-            st.session_state.skill_analyzer = create_skill_gap_analyzer(str(project_root / "configs" / "system_config.yaml"))
+            # Initialize text mapper
+            st.info("Setting up text mapper...")
+            text_mapper = create_text_mapper(processed_dir)
+            if not text_mapper:
+                st.error("Failed to initialize text mapper")
+                return False
+            st.session_state.text_mapper = text_mapper
+            
+            # Initialize skill analyzer
+            st.info("Initializing skill analyzer...")
+            # create_skill_gap_analyzer expects a config path (str). Pass the system config
+            # and then attach our loaded esco_loader instance so the analyzer uses the same data.
+            config_path = str(project_root / "configs" / "system_config.yaml")
+            skill_analyzer = create_skill_gap_analyzer(config_path)
+            if not skill_analyzer:
+                st.error("Failed to initialize skill analyzer")
+                return False
+            try:
+                # attach the ESCO loader instance for consistency
+                skill_analyzer.esco_loader = esco_loader
+            except Exception:
+                # non-fatal: some analyzer implementations may ignore this
+                pass
+            st.session_state.skill_analyzer = skill_analyzer
             
             # Initialize career path recommender
+            st.info("Loading career path model...")
             try:
+                model_dir = str(project_root / "models" / "bert4rec")
+                esco_data_dir = str(project_root / "data" / "processed")
+                
+                if not Path(model_dir).exists():
+                    raise FileNotFoundError(f"Model directory not found: {model_dir}")
+                    
+                checkpoint_path = Path(model_dir) / "checkpoints" / "best_model.pt"
+                if not checkpoint_path.exists():
+                    raise FileNotFoundError(f"Model checkpoint not found: {checkpoint_path}")
+                
                 st.session_state.recommender = create_career_recommender(
-                    model_dir=str(project_root / "models" / "bert4rec"),
-                    esco_data_dir=str(project_root / "data" / "processed")
+                    model_dir=model_dir,
+                    esco_data_dir=esco_data_dir
                 )
                 st.success("Career path recommender loaded successfully!")
+            except FileNotFoundError as e:
+                st.error(f"Model files missing: {e}")
+                st.session_state.recommender = None
             except Exception as e:
-                st.warning(f"Could not load career recommender: {e}")
+                st.error(f"Could not load career recommender: {str(e)}")
                 st.session_state.recommender = None
             
             st.session_state.data_initialized = True
@@ -129,82 +208,41 @@ def initialize_data():
 def main():
     """Main application function."""
     
-    # Header
-    st.markdown('<h1 class="main-header">🚀 Career Path Recommender</h1>', unsafe_allow_html=True)
-    st.markdown("**Knowledge-Aware Hybrid Recommender for Sustainable Career Path and Proactive Upskilling**")
-    
-    # Sidebar
-    st.sidebar.title("Navigation")
-    page = st.sidebar.selectbox(
-        "Choose a page:",
-        ["Home", "User Onboarding", "Path Recommendations", "Learning Resources", "System Demo", "About"]
-    )
-    
-    # Initialize data if needed
-    if not st.session_state.data_initialized:
-        if st.sidebar.button("Initialize System"):
-            if initialize_data():
-                st.success("System initialized successfully!")
-                st.rerun()
-            else:
-                st.error("System initialization failed!")
-                return
-        else:
-            st.warning("Please initialize the system using the sidebar button.")
-            return
-    
-    # Page routing
-    if page == "Home":
-        show_home_page()
-    elif page == "User Onboarding":
-        show_onboarding_page()
-    elif page == "Path Recommendations":
-        show_recommendations_page()
-    elif page == "Learning Resources":
-        show_resources_page()
-    elif page == "System Demo":
-        show_demo_page()
-    elif page == "About":
-        show_about_page()
+    try:
+        with st.spinner("Processing..."):
+            # Header
+            st.markdown('<h1 class="main-header">🚀DA 2 SDG 8 Job Reccomender </h1>', unsafe_allow_html=True)
+            st.markdown("**Knowledge-Aware Hybrid Recommender for Sustainable Career Path and Proactive Upskilling - SDG 8**")
+            
+            # Inform user if optional visualization dependency is missing
+            if not globals().get('PLOTLY_AVAILABLE', False):
+                st.warning("📊 Optional dependency 'plotly' is not installed — some visualizations are disabled. Install `plotly` to enable charts or continue without them.")
+            
+            # Sidebar
+            st.sidebar.title("Navigation")
+            page = st.sidebar.selectbox("Choose a page:", ["User Onboarding", "Career Paths", "Skill Analysis"])
 
-def show_home_page():
-    """Show the home page."""
-    st.markdown('<h2 class="section-header">Welcome to the Career Path Recommender</h2>', unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("""
-        ### 🎯 Stage 1: Path Generation
-        - BERT4Rec transformer model
-        - Bidirectional sequence modeling
-        - Masked language modeling
-        - Beam search for diversity
-        """)
-    
-    with col2:
-        st.markdown("""
-        ### 🧠 Stage 2: Skill Gap Analysis
-        - ESCO knowledge graph integration
-        - Ontology-based skill distances
-        - Feasibility scoring
-        - Combined model + feasibility scores
-        """)
-    
-    with col3:
-        st.markdown("""
-        ### 📚 Stage 3: Resource Recommendation
-        - Content-based filtering
-        - TF-IDF + semantic embeddings
-        - FAISS nearest neighbor search
-        - Learning path optimization
-        """)
-    
-    st.markdown("---")
-    
-    # System status
-    st.markdown('<h3 class="section-header">System Status</h3>', unsafe_allow_html=True)
-    
+            # Initialize data if needed
+            if not st.session_state.get('data_initialized'):
+                success = initialize_data()
+                if not success:
+                    st.error("System initialization failed!")
+                    return
+    except Exception as e:
+        st.error("An error occurred during initialization. Please try refreshing the page.")
+        return
+
+    # Show selected page
+    if page == "User Onboarding":
+        show_onboarding_page()
+    elif page == "Career Paths":
+        show_recommendations_page()
+    else:
+        # Fallback or skill analysis
+        try:
+            show_skill_analysis_page()
+        except NameError:
+            st.info("Skill analysis is not yet available.")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -247,6 +285,20 @@ def show_onboarding_page():
             height=150,
             help="Enter your job titles in reverse chronological order"
         )
+        
+        # Show mapping results in real-time
+        if job_history:
+            st.markdown("**🔄 Job Title Mapping Results:**")
+            from utils import map_job_title_with_confidence
+            
+            for job in job_history.split('\n'):
+                if job.strip():
+                    mapped_title, confidence = map_job_title_with_confidence(job.strip())
+                    if mapped_title:
+                        emoji = "✅" if confidence >= 0.7 else "⚠️" if confidence >= 0.4 else "❌"
+                        st.markdown(f"{emoji} '{job}' → '{mapped_title}' ({confidence:.1%} confidence)")
+                    else:
+                        st.markdown(f"❌ '{job}' → No match found ({confidence:.1%} confidence)")
     
     with col2:
         st.markdown("**Available ESCO Occupations (sample):**")
@@ -254,8 +306,14 @@ def show_onboarding_page():
             sample_jobs = list(st.session_state.esco_loader.occupations.items())[:5]
             for esco_id, job_data in sample_jobs:
                 st.write(f"• {job_data['title']} ({esco_id})")
-        else:
-            st.write("ESCO data not loaded")
+            
+            st.markdown("---")
+            st.markdown("""
+            **Confidence Levels:**
+            - ✅ High (>70%): Strong match
+            - ⚠️ Medium (40-70%): Possible match
+            - ❌ Low (<40%): No reliable match
+            """)
     
     # Skills input
     st.markdown("### 🛠️ Current Skills")
@@ -270,6 +328,20 @@ def show_onboarding_page():
             height=150,
             help="Enter your current skills and competencies"
         )
+        
+        # Show mapping results in real-time
+        if skills_input:
+            st.markdown("**🔄 Skill Mapping Results:**")
+            from utils import map_skill_with_confidence
+            
+            for skill in skills_input.split('\n'):
+                if skill.strip():
+                    mapped_skill, confidence = map_skill_with_confidence(skill.strip())
+                    if mapped_skill:
+                        emoji = "✅" if confidence >= 0.7 else "⚠️" if confidence >= 0.4 else "❌"
+                        st.markdown(f"{emoji} '{skill}' → '{mapped_skill}' ({confidence:.1%} confidence)")
+                    else:
+                        st.markdown(f"❌ '{skill}' → No match found ({confidence:.1%} confidence)")
     
     with col2:
         st.markdown("**Available ESCO Skills (sample):**")
@@ -277,8 +349,16 @@ def show_onboarding_page():
             sample_skills = list(st.session_state.esco_loader.skills.items())[:5]
             for esco_id, skill_data in sample_skills:
                 st.write(f"• {skill_data['title']} ({esco_id})")
-        else:
-            st.write("ESCO data not loaded")
+            
+            st.markdown("---")
+            st.markdown("""
+            **Mapping Confidence:**
+            - ✅ High (>70%): Direct ESCO match
+            - ⚠️ Medium (40-70%): Related skill found
+            - ❌ Low (<40%): No suitable match
+            """)
+            
+            st.info("💡 Tip: Try to use standard skill descriptions for better matches.")
     
     # Save to session state
     if st.button("Save Profile", type="primary"):
@@ -302,7 +382,7 @@ def show_onboarding_page():
 
 def generate_candidate_paths(user_job_history: List[str], top_k: int = 5) -> List[tuple]:
     """
-    Generate candidate career paths using the enhanced recommender.
+    Generate candidate career paths using text mapping and AI recommendations.
     
     Args:
         user_job_history: List of user's job history
@@ -311,44 +391,158 @@ def generate_candidate_paths(user_job_history: List[str], top_k: int = 5) -> Lis
     Returns:
         List of (path, probability) tuples
     """
-    # Use the enhanced recommender if available
+    if not user_job_history:
+        st.error("No job history provided")
+        return []
+    
+    current_job = user_job_history[-1]
+    
+    # Try using text mapper first
+    if st.session_state.text_mapper:
+        try:
+            matches = []
+            with st.spinner(f"Finding relevant career paths based on: {current_job}"):
+                matches = st.session_state.text_mapper.map_text_to_occupations(
+                    current_job, top_k=top_k*2, score_threshold=0.3
+                )
+                
+            if isinstance(matches, (list, tuple)) and matches:
+                candidate_paths = []
+                for match in matches:
+                    if isinstance(match, dict):
+                        path = [match.get('esco_id')]
+                        probability = match.get('score', 0.5)
+                        if path[0]:  # Only add if we got a valid ESCO ID
+                            candidate_paths.append((path, probability))
+                
+                if candidate_paths:
+                    st.success(f"Found {len(candidate_paths)} relevant career paths!")
+                    return sorted(candidate_paths, key=lambda x: x[1], reverse=True)[:top_k]
+        except:
+            pass  # Silently handle mapping errors and continue to next method
+    
+    # Try AI recommender as backup
     if st.session_state.recommender is not None:
         try:
-            st.info("Generating personalized recommendations using the trained model...")
-            
-            # Generate recommendations using the enhanced recommender
-            recommendations = st.session_state.recommender.generate_recommendations(
+            st.info("Using AI recommender...")
+            recs = st.session_state.recommender.generate_recommendations(
                 user_job_history, top_k=top_k
             )
             
-            # Convert to the format expected by the rest of the system
             candidate_paths = []
-            for rec in recommendations:
-                # Use the ESCO info if available, otherwise fall back to model key
-                if rec['esco_info']:
-                    path_element = rec['esco_info']['esco_id']
-                else:
-                    # Create a mock ESCO ID for model-generated jobs
-                    path_element = f"model_{rec['model_job_id']}"
-                
-                path = [path_element]
-                probability = rec['probability']
-                candidate_paths.append((path, probability))
+            for rec in recs:
+                if rec.get('esco_info'):
+                    path = [rec['esco_info']['esco_id']]
+                    probability = rec.get('probability', 0.5)
+                    candidate_paths.append((path, probability))
             
             if candidate_paths:
-                st.success(f"Generated {len(candidate_paths)} personalized recommendations!")
+                st.success(f"Generated {len(candidate_paths)} AI recommendations!")
                 return candidate_paths
-            
+                
         except Exception as e:
-            st.error(f"Error with enhanced recommender: {e}")
+            st.error(f"AI recommender failed: {str(e)}")
     
-    # Fallback to mock data if recommender is not available or fails
-    st.warning("Using mock recommendations (recommender not available)")
-    return [
-        (['occ_001', 'occ_002'], 0.85),  # Software Engineer -> Data Scientist
-        (['occ_001', 'occ_003'], 0.72),  # Software Engineer -> Marketing Manager
-        (['occ_002', 'occ_003'], 0.58),  # Data Scientist -> Marketing Manager
-    ]
+    # Fallback to fuzzy matching
+    if st.session_state.esco_loader:
+        st.warning("Using simple job matching...")
+        from difflib import SequenceMatcher
+        matches = []
+        
+        for esco_id, job_data in st.session_state.esco_loader.occupations.items():
+            title = job_data.get('title', '')
+            if title:
+                score = SequenceMatcher(None, current_job.lower(), title.lower()).ratio()
+                if score >= 0.3:
+                    matches.append((esco_id, score))
+        
+        if matches:
+            matches.sort(key=lambda x: x[1], reverse=True)
+            paths = [([esco_id], score) for esco_id, score in matches[:top_k]]
+            st.success(f"Found {len(paths)} similar jobs!")
+            return paths
+    
+    st.error("Could not generate recommendations. Please try a different job title.")
+    return []
+
+def get_gemini_explanation(prompt: str) -> str:
+    """Generate career path explanation using templates when API is unavailable."""
+    try:
+        # First try template-based explanation
+        explanation = generate_path_explanation(prompt)
+        if explanation:
+            return explanation
+            
+        # Fallback to API only if template fails
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            return "[AI explanation unavailable: No API key provided]"
+            
+        url = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.7,
+                "topP": 0.8,
+                "topK": 40
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        return data['candidates'][0]['content']['parts'][0]['text']
+        
+    except Exception as e:
+        return generate_path_explanation(prompt) or f"[Explanation generation failed: {str(e)}]"
+
+def generate_path_explanation(prompt: str) -> str:
+    """Generate explanation using templates based on the career path."""
+    if not prompt:
+        return ""
+        
+    # Extract job titles from prompt
+    path_match = re.search(r"career path (.*?) is a good recommendation", prompt)
+    if not path_match:
+        return ""
+    
+    path = path_match.group(1)
+    jobs = [job.strip() for job in path.split('→')]
+    
+    if len(jobs) < 1:
+        return ""
+        
+    current_job = jobs[0]
+    target_job = jobs[-1] if len(jobs) > 1 else jobs[0]
+    
+    # Get user skills from prompt
+    skills_match = re.search(r"user's skills: (.*?)$", prompt)
+    user_skills = skills_match.group(1) if skills_match else "N/A"
+    
+    # Template-based explanation
+    explanation = f"""This career path recommendation from {current_job} to {target_job} is based on:
+
+1. Skills Alignment: The path leverages your current skills in {user_skills}
+
+2. Career Progression: This transition represents a natural career progression that many professionals have successfully made.
+
+3. Market Demand: Both roles are in high demand in the current job market, providing good career stability.
+
+4. Growth Potential: This path offers opportunities for professional growth and skill development.
+
+To increase your success in this transition, focus on:
+• Developing the identified missing skills through training and certifications
+• Building practical experience in key technical areas
+• Networking with professionals in the target role"""
+
+    return explanation
+
 
 def show_recommendations_page():
     """Show the career path recommendations page."""
@@ -385,9 +579,24 @@ def show_recommendations_page():
         # Try to map user skills to ESCO IDs
         text_mapper = create_text_mapper(str(project_root / "data" / "processed"))
         for skill in st.session_state.user_skills:
-            matches = text_mapper.map_text_to_skills(skill, top_k=1)
+            matches = text_mapper.map_text_to_skills(skill, top_k=2)
             if matches:
-                user_skill_set.add(matches[0]['esco_id'])
+                # mapper returns list of dicts; take top match
+                user_skill_set.add(matches[0].get('esco_id'))
+            else:
+                # Fallback: try simple fuzzy/title match against ESCO skills
+                from difflib import SequenceMatcher
+                best = (None, 0.0)
+                for esco_id, sdata in st.session_state.esco_loader.skills.items():
+                    title = sdata.get('title', '')
+                    score = SequenceMatcher(None, skill.lower(), title.lower()).ratio()
+                    if score > best[1]:
+                        best = (esco_id, score)
+                # Accept fallback match if reasonably similar
+                if best[0] and best[1] >= 0.6:
+                    user_skill_set.add(best[0])
+                    # optional: show a note to the user about the fallback mapping
+                    st.info(f"Fallback mapped skill '{skill}' → {st.session_state.esco_loader.skills[best[0]]['title']} ({best[1]:.0%})")
     else:
         # Fallback to mock data
         user_skill_set = {'skill_001', 'skill_002'}
@@ -426,6 +635,13 @@ def show_recommendations_page():
                 with col4:
                     st.metric("Missing Skills", analysis.total_missing_skills)
                 
+                # AI explanation
+                with st.expander(f"AI Explanation for Path {i}"):
+                    user_skills = ', '.join(st.session_state.user_skills) if 'user_skills' in st.session_state else 'N/A'
+                    prompt = f"Explain why the career path {' → '.join(path_titles)} is a good recommendation. Consider the user's skills: {user_skills}."
+                    explanation = get_gemini_explanation(prompt)
+                    st.write(explanation)
+                
                 # Detailed breakdown
                 with st.expander(f"Detailed Analysis for Path {i}"):
                     for job_id, gap in analysis.per_job_gaps.items():
@@ -454,6 +670,11 @@ def show_recommendations_page():
     
     else:
         st.error("Skill analyzer not initialized!")
+
+def show_skill_analysis_page():
+    """Placeholder for the skill analysis page."""
+    st.markdown('<h2 class="section-header">Skill Analysis</h2>', unsafe_allow_html=True)
+    st.info("Skill analysis is under construction. Use the Demo or Career Paths pages for now.")
 
 def show_resources_page():
     """Show the learning resources page."""

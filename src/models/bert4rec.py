@@ -441,3 +441,56 @@ def create_bert4rec_model(config: BERT4RecConfig) -> BERT4Rec:
         pad_token_id=config.pad_token_id,
         mask_token_id=config.mask_token_id
     )
+
+
+def predict_next(logits: Union[torch.Tensor, np.ndarray],
+                 pad_token_id: int = 0,
+                 mask_token_id: int = 1,
+                 exclude_ids: Optional[set] = None,
+                 top_k: int = 5) -> Union[List[Tuple[int, float]], List[List[Tuple[int, float]]]]:
+    """
+    Predict next token(s) from logits while filtering PAD/MASK and optional exclude_ids.
+
+    Args:
+        logits: 1D (vocab,) or 2D (batch, vocab) logits tensor/array
+        pad_token_id: ID for PAD token (will be removed)
+        mask_token_id: ID for MASK token (will be removed)
+        exclude_ids: set of ids to exclude (e.g., seen ids)
+        top_k: number of top items to return
+
+    Returns:
+        For 1D logits: list of (token_id, prob) sorted by prob desc
+        For 2D logits: list per batch element
+    """
+    if exclude_ids is None:
+        exclude_ids = set()
+
+    # Convert to torch tensor
+    if isinstance(logits, np.ndarray):
+        logits = torch.from_numpy(logits)
+
+    # Handle batch or single
+    if logits.dim() == 1:
+        logits_vec = logits.clone().float()
+        # Mask out PAD and MASK and any excluded ids by setting very negative value
+        neg_inf = -1e9
+        for bad_id in (pad_token_id, mask_token_id):
+            if 0 <= bad_id < logits_vec.size(0):
+                logits_vec[bad_id] = neg_inf
+        for ex in exclude_ids:
+            if 0 <= ex < logits_vec.size(0):
+                logits_vec[ex] = neg_inf
+
+        probs = F.softmax(logits_vec, dim=-1)
+        top_probs, top_indices = torch.topk(probs, min(top_k, probs.size(0)))
+        return [(int(idx), float(prob)) for idx, prob in zip(top_indices, top_probs)]
+
+    elif logits.dim() == 2:
+        results = []
+        for i in range(logits.size(0)):
+            res = predict_next(logits[i], pad_token_id, mask_token_id, exclude_ids, top_k)
+            results.append(res)
+        return results
+
+    else:
+        raise ValueError("logits must be a 1D or 2D tensor/array")

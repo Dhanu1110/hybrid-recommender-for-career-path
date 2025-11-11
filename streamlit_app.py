@@ -7,11 +7,19 @@ Simplified version for Streamlit Cloud deployment
 import streamlit as st
 import sys
 import os
-from pathlib import Path
-import pandas as pd
 import json
 import warnings
+import yaml
+from pathlib import Path
+import pandas as pd
+# Removed plotly dependency: use Streamlit-native charts to keep the demo lightweight
+
+# Suppress warnings to keep the interface clean
 warnings.filterwarnings('ignore')
+
+# Add src directory to path for imports
+project_root = Path(__file__).parent
+sys.path.append(str(project_root))
 
 # Page configuration
 st.set_page_config(
@@ -369,20 +377,51 @@ def show_synthetic_demo():
             st.success("✅ Generated 10 sample career paths")
             st.dataframe(sample_data)
             
-            # Simple visualization
-            try:
-                import plotly.express as px
-                fig = px.bar(sample_data, x='industry', y='length', 
-                           title='Career Path Lengths by Industry')
-                st.plotly_chart(fig, use_container_width=True)
-            except ImportError:
-                st.info("📊 Visualization requires plotly (install for full features)")
+            # Simple visualization using Streamlit native chart
+            industry_counts = sample_data.groupby('industry')['length'].sum()
+            st.bar_chart(industry_counts)
 
 def show_system_status():
     """Display system status and diagnostics"""
 
     st.markdown('<h2 class="section-header">🔧 System Status</h2>', unsafe_allow_html=True)
 
+    # Load configuration if not loaded
+    if 'config' not in st.session_state:
+        try:
+            import yaml
+            config_path = Path("configs") / "system_config.yaml"
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    st.session_state.config = yaml.safe_load(f)
+        except Exception as e:
+            st.error(f"Could not load config: {e}")
+            st.session_state.config = {}
+    
+    # Display component status
+    st.markdown("### 🎯 Core Components")
+    
+    components = [
+        ("📝 System Configuration", bool(st.session_state.get('config'))),
+        ("🔍 Text-to-ESCO Mapper", Path("data/processed").exists()),
+        ("🧠 ESCO Knowledge Graph", Path("data/processed/esco_occupations.parquet").exists()),
+        ("🔬 Skill Gap Analyzer", Path("data/processed/esco_skills.parquet").exists()),
+        ("🤖 Career Path Model", Path("models/bert4rec/model_config.json").exists())
+    ]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        for component, status in components:
+            emoji = "✅" if status else "❌"
+            st.markdown(f"{emoji} {component}")
+            
+    with col2:
+        if st.session_state.get('config'):
+            config = st.session_state.config
+            st.metric("Confidence Threshold", f"{config.get('mapping', {}).get('confidence_threshold', 0.4):.1%}")
+            st.metric("Processing Directory", config.get('data', {}).get('processed_dir', 'data/processed'))
+            
     # Check core dependencies
     st.markdown("### 📦 Core Dependencies Status")
 
@@ -390,7 +429,7 @@ def show_system_status():
         ('streamlit', 'Streamlit'),
         ('pandas', 'Pandas'),
         ('numpy', 'NumPy'),
-        ('plotly', 'Plotly'),
+        # Plotly removed from demo dependencies; visualizations use Streamlit-native charts
         ('yaml', 'PyYAML'),
         ('requests', 'Requests')
     ]

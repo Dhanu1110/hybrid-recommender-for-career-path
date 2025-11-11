@@ -365,90 +365,128 @@ def create_synthetic_data(num_sequences: int = 1000,
 def main():
     """Main training function."""
     parser = argparse.ArgumentParser(description='Train BERT4Rec for career path prediction')
-    parser.add_argument('--data-path', type=str, default='data/processed/career_paths.parquet',
-                       help='Path to career paths data')
+    parser.add_argument('--data', type=str, default='data/processed/career_paths.parquet',
+                       help='Path to career sequences data')
     parser.add_argument('--synthetic', action='store_true',
                        help='Use synthetic data for testing')
-    parser.add_argument('--config-path', type=str, default='configs/bert4rec_config.json',
-                       help='Path to model configuration')
-    parser.add_argument('--output-dir', type=str, default='models/bert4rec',
+    parser.add_argument('--models_dir', type=str, default='models/bert4rec',
                        help='Output directory for model and checkpoints')
-    parser.add_argument('--epochs', type=int, default=10,
-                       help='Number of training epochs')
-    parser.add_argument('--batch-size', type=int, default=32,
-                       help='Batch size for training')
+    parser.add_argument('--configs', type=str, default='configs/system_config.yaml',
+                       help='Path to system config yaml')
+    parser.add_argument('--epochs', type=int, default=None,
+                       help='Number of training epochs (overrides config)')
+    parser.add_argument('--batch-size', type=int, default=None,
+                       help='Batch size for training (overrides config)')
     parser.add_argument('--learning-rate', type=float, default=1e-4,
                        help='Learning rate')
     parser.add_argument('--val-split', type=float, default=0.2,
                        help='Validation split ratio')
-    
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+
     args = parser.parse_args()
-    
+
     # Setup logging
     logging.basicConfig(level=logging.INFO)
-    
+
+    # Load config values
+    config_defaults = {}
+    try:
+        import yaml
+        with open(args.configs, 'r') as f:
+            cfg = yaml.safe_load(f)
+            config_defaults = cfg.get('train', {}) if cfg else {}
+    except Exception:
+        config_defaults = {}
+
+    max_len = int(config_defaults.get('max_len', 32))
+    mask_prob = float(config_defaults.get('mask_prob', 0.15))
+    epochs = int(args.epochs if args.epochs is not None else config_defaults.get('epochs', 5))
+    batch_size = int(args.batch_size if args.batch_size is not None else config_defaults.get('batch_size', 32))
+
+    # Set deterministic seeds
+    seed = int(args.seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    # Make cuDNN deterministic where possible
+    try:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
+
     # Create output directory
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.models_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Load or create data
     if args.synthetic:
         sequences, job_to_id = create_synthetic_data()
     else:
-        if not Path(args.data_path).exists():
-            logger.error(f"Data file not found: {args.data_path}")
+        data_path = args.data
+        if not Path(data_path).exists():
+            logger.error(f"Data file not found: {data_path}")
             logger.info("Use --synthetic flag to create synthetic data for testing")
             return
-        sequences, job_to_id = load_career_sequences(args.data_path)
-    
-    # Save vocabulary
+        sequences, job_to_id = load_career_sequences(data_path)
+
+    # Save vocabulary under standardized name
+    vocab_path = output_dir / 'vocab.json'
+    with open(vocab_path, 'w') as f:
+        json.dump(job_to_id, f, indent=2)
+    # Also save a job_vocab.json for compatibility
     with open(output_dir / 'job_vocab.json', 'w') as f:
         json.dump(job_to_id, f, indent=2)
-    
+
     # Create model config
     config = BERT4RecConfig(
         vocab_size=len(job_to_id),
         d_model=256,
-        n_layers=6,
-        n_heads=8,
-        max_seq_len=50
+        n_layers=2,
+        n_heads=4,
+        max_seq_len=max_len
     )
-    
+
     # Save config
     with open(output_dir / 'model_config.json', 'w') as f:
         json.dump(config.to_dict(), f, indent=2)
-    
+
     # Split data
     random.shuffle(sequences)
     split_idx = int(len(sequences) * (1 - args.val_split))
     train_sequences = sequences[:split_idx]
     val_sequences = sequences[split_idx:]
-    
+
     # Create datasets
-    train_dataset = CareerSequenceDataset(train_sequences, config.vocab_size)
-    val_dataset = CareerSequenceDataset(val_sequences, config.vocab_size) if val_sequences else None
-    
+    train_dataset = CareerSequenceDataset(train_sequences, config.vocab_size,
+                                          max_seq_len=max_len, mask_prob=mask_prob)
+    val_dataset = CareerSequenceDataset(val_sequences, config.vocab_size,
+                                        max_seq_len=max_len, mask_prob=mask_prob) if val_sequences else None
+
     # Create data loaders
     train_dataloader = DataLoader(
-        train_dataset, 
-        batch_size=args.batch_size, 
+        train_dataset,
+        batch_size=batch_size,
         shuffle=True,
         collate_fn=lambda batch: collate_fn(batch, config.pad_token_id)
     )
-    
+
     val_dataloader = None
     if val_dataset:
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=args.batch_size,
+            batch_size=batch_size,
             shuffle=False,
             collate_fn=lambda batch: collate_fn(batch, config.pad_token_id)
         )
-    
+
     # Create model
     model = create_bert4rec_model(config)
     logger.info(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
-    
+
     # Create trainer
     trainer = BERT4RecTrainer(
         model=model,
@@ -456,12 +494,32 @@ def main():
         val_dataloader=val_dataloader,
         learning_rate=args.learning_rate
     )
-    
+
     # Train model
+    checkpoints_dir = output_dir / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
     trainer.train(
-        num_epochs=args.epochs,
-        save_dir=output_dir / "checkpoints"
+        num_epochs=epochs,
+        save_dir=checkpoints_dir,
+        save_every=epochs + 1  # avoid intermediate checkpointing; we'll save final
     )
+
+    # Save a tiny named checkpoint path requested
+    tiny_checkpoint = checkpoints_dir / "bert4rec_tiny.pt"
+    trainer.save_checkpoint(str(tiny_checkpoint))
+
+    # Save artifacts.json
+    artifacts = {
+        "vocab_path": str(vocab_path),
+        "checkpoint_path": str(tiny_checkpoint),
+        "processed_dir": str(Path("data/processed"))
+    }
+    with open(output_dir / "artifacts.json", 'w') as f:
+        json.dump(artifacts, f, indent=2)
+
+    logger.info(f"Training finished. Artifacts written to {output_dir}")
+
 
 if __name__ == "__main__":
     main()
